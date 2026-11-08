@@ -117,7 +117,9 @@ navigateur embarqué.
 
 ### Téléchargement et lancement
 
-L’AppImage Linux est produite à la racine de l’application :
+Les binaires officiels sont publiés dans les
+[releases GitHub](https://github.com/MrTHP/Le-Salon/releases). L’AppImage
+Linux peut aussi être produite localement, à la racine de l’application :
 
 ```sh
 chmod +x Le-Salon-1.6.1-x86_64.AppImage
@@ -399,7 +401,9 @@ framework: GPU rendering, fast startup, no Electron and no embedded browser.
 
 ### Download and run
 
-The Linux AppImage is produced at the application root:
+Official binaries are published in the
+[GitHub releases](https://github.com/MrTHP/Le-Salon/releases). The Linux
+AppImage can also be produced locally at the application root:
 
 ```sh
 chmod +x Le-Salon-1.6.1-x86_64.AppImage
