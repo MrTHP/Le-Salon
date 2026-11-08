@@ -8,6 +8,7 @@ mod connect_form;
 mod emoji;
 mod i18n;
 mod menu;
+mod preferences;
 mod schedule;
 mod text_input;
 mod theme;

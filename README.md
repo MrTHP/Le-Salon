@@ -6,7 +6,7 @@
 [![GPUI](https://img.shields.io/badge/UI-GPUI-blue)](https://gpui.rs/)
 [![Linux](https://img.shields.io/badge/Linux-AppImage-success?logo=linux)](https://appimage.org/)
 [![macOS](https://img.shields.io/badge/macOS-universal-lightgrey?logo=apple)](https://www.apple.com/macos/)
-[![Version](https://img.shields.io/badge/version-1.6.1-informational)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-1.7.0-informational)](Cargo.toml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#licence)
 
 **🇫🇷 [Français](#français) · 🇬🇧 [English](#english)**
@@ -61,7 +61,7 @@ navigateur embarqué.
 | Capacités | `message-tags`, `server-time`, `echo-message`, `multi-prefix`, `sasl`, `cap-notify`, `account-notify`, `account-tag`, `away-notify`, `batch`, `chathistory`, `extended-join`, `invite-notify`, `message-ids`, `monitor`, `setname`, `userhost-in-names`, `typing`, `chghost` |
 | Authentification | **SASL PLAIN**, découpage 400 octets, échec non bloquant |
 | TLS | **rustls**, SNI, vérification des certificats (option non vérifiée pour les tests) |
-| Messages | tags IRCv3, `server-time`, `echo-message` sans doublon, CTCP `VERSION/PING/TIME/CLIENTINFO` |
+| Messages | tags IRCv3, `server-time`, `echo-message` sans doublon, CTCP `VERSION/PING/CLIENTINFO` |
 | Salons | JOIN étendu, NAMES multi-préfixes, MODE, TOPIC, KICK, INVITE, AWAY, ACCOUNT, CHGHOST, SETNAME |
 | Réseau | reconnexion avec backoff, keepalive, PING/PONG, latence, plusieurs réseaux en parallèle |
 
@@ -81,20 +81,27 @@ navigateur embarqué.
 * **fenêtre « Liste des salons »** séparée : recherche instantanée nom/sujet,
   nombre d’utilisateurs, tri par population, double-clic ou Entrée pour
   rejoindre ;
+* **fenêtre « Préférences »** séparée (`Ctrl+P`) : thème, langue, notifications,
+  toasts in-app, durée d’affichage et confirmation des uploads ;
+* **toasts dans le coin** pendant 2 à 5 secondes pour les mentions et messages
+  privés (ou tous les messages, au choix) ;
 * **menus** Fichier / Réseau / Salon / Affichage / Aide et **clic droit** sur
   les pseudos, salons, réseaux et le journal ;
 * **info-bulles** au survol des icônes, menus et boutons, en français ou en
   anglais ; le survol d’un pseudo affiche un mini-profil (rôle, compte, hôte,
   absence) ;
-* **18 thèmes** : Nuit, Océan, Forêt, Améthyste, Sakura, Dracula, Nord,
+* **19 thèmes** : Nuit, Océan, Forêt, Améthyste, Sakura, Dracula, Nord,
   Gruvbox, Monokai, Solarized sombre/clair, Minuit, Carbone, Cyberpunk,
-  Papier, Glacier, Rosé, Terminal — bouton ◐ ou `Ctrl+T` ;
+  Papier, Glacier, Rosé, Terminal, **Tux (Linux)** — bouton ◐, `Ctrl+T` ou
+  fenêtre Préférences ;
 * **plus de 300 emojis** avec recherche FR/EN et insertion au curseur ;
 * notifications natives au mention/message privé quand la fenêtre est
-  inactive ; **icône de barre système** sous Linux (StatusNotifierItem),
-  déclinée en canapé comme l’icône de l’application ;
+  inactive, **toasts in-app configurables** (2/3/5 s) et désactivables ;
+  **icône de barre système** sous Linux (StatusNotifierItem), déclinée en
+  canapé comme l’icône de l’application ;
 * fermeture par le **X** → reste dans le tray ; clic droit sur le tray →
-  Afficher / Réduire / Notifications / Déconnecter / **Quitter** ;
+  Afficher / Réduire / **Préférences** / Notifications / Déconnecter /
+  **Quitter** ;
 * indicateur « est en train d’écrire… », titre de fenêtre avec non-lus.
 
 #### Au-delà du texte
@@ -122,15 +129,15 @@ Les binaires officiels sont publiés dans les
 Linux peut aussi être produite localement, à la racine de l’application :
 
 ```sh
-chmod +x Le-Salon-1.6.1-x86_64.AppImage
-./Le-Salon-1.6.1-x86_64.AppImage
+chmod +x Le-Salon-1.7.0-x86_64.AppImage
+./Le-Salon-1.7.0-x86_64.AppImage
 ```
 
 Si Wayland pose problème, l’AppRun retente automatiquement sous XWayland.
 Pour forcer X11 :
 
 ```sh
-LE_SALON_X11=1 ./Le-Salon-1.6.1-x86_64.AppImage
+LE_SALON_X11=1 ./Le-Salon-1.7.0-x86_64.AppImage
 ```
 
 L’AppImage embarque le binaire et les bibliothèques X11/xkb ; Vulkan, Wayland,
@@ -168,7 +175,7 @@ sudo apt install build-essential pkg-config \
 
 ```sh
 sh tools/build-appimage-le-salon.sh
-# → Le-Salon-1.6.1-x86_64.AppImage
+# → Le-Salon-1.7.0-x86_64.AppImage
 ```
 
 #### macOS
@@ -180,12 +187,12 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin
 sh tools/build-macos-app.sh
 ```
 
-Le script produit `Le-Salon-1.6.1-macos-universal.zip` (arm64 + Intel) avec
+Le script produit `Le-Salon-1.7.0-macos-universal.zip` (arm64 + Intel) avec
 une signature ad-hoc. macOS bloque les applications non notariées au premier
 lancement :
 
 ```sh
-unzip Le-Salon-1.6.1-macos-universal.zip
+unzip Le-Salon-1.7.0-macos-universal.zip
 xattr -dr com.apple.quarantine "Le Salon.app"
 open "Le Salon.app"
 ```
@@ -240,6 +247,7 @@ Fonctions locales :
 | Raccourci | Action |
 |---|---|
 | `Ctrl+T` (`Cmd+T` sur macOS) | thèmes |
+| `Ctrl+P` | préférences |
 | `Ctrl+E` | emojis |
 | `Ctrl+N` | nouveau réseau |
 | `Ctrl+F` | focus sur la saisie |
@@ -270,6 +278,9 @@ Fonctions locales :
   `LE_SALON_SASL_PASSWORD` à `--sasl-password` (visible dans `ps`).
 * `config.toml` et `scheduled.json` sont écrits en **0600** dans un dossier
   **0700**. Détails et limites : [`SECURITY.md`](SECURITY.md).
+* La fenêtre **Préférences** ne touche qu’aux réglages d’interface : elle
+  n’affiche ni ne modifie les secrets de connexion. Les toasts affichent le
+  contenu des messages et peuvent être désactivés.
 * Le bouton X minimise Le Salon dans la barre système Linux ; pour quitter,
   utiliser le menu du tray ou **Fichier → Quitter**.
 
@@ -349,7 +360,7 @@ framework: GPU rendering, fast startup, no Electron and no embedded browser.
 | Capabilities | `message-tags`, `server-time`, `echo-message`, `multi-prefix`, `sasl`, `cap-notify`, `account-notify`, `account-tag`, `away-notify`, `batch`, `chathistory`, `extended-join`, `invite-notify`, `message-ids`, `monitor`, `setname`, `userhost-in-names`, `typing`, `chghost` |
 | Authentication | **SASL PLAIN**, 400-byte chunks, non-blocking failure |
 | TLS | **rustls**, SNI, certificate verification (insecure option for test servers) |
-| Messages | IRCv3 tags, `server-time`, duplicate-free `echo-message`, CTCP `VERSION/PING/TIME/CLIENTINFO` |
+| Messages | IRCv3 tags, `server-time`, duplicate-free `echo-message`, CTCP `VERSION/PING/CLIENTINFO` |
 | Channels | extended JOIN, multi-prefix NAMES, MODE, TOPIC, KICK, INVITE, AWAY, ACCOUNT, CHGHOST, SETNAME |
 | Networking | automatic reconnect with backoff, keepalive, PING/PONG, latency, multiple networks |
 
@@ -367,19 +378,25 @@ framework: GPU rendering, fast startup, no Electron and no embedded browser.
 * **resizable panels**: tree ↔ chat log ↔ nickname list, widths persisted;
 * **separate “Channel list” window**: instant name/topic search, user count,
   population sorting, double-click or Enter to join;
+* **separate “Preferences” window** (`Ctrl+P`): theme, language,
+  notifications, in-app toasts, display duration and upload confirmation;
+* **corner toasts** for 2–5 seconds on mentions and private messages (or all
+  messages, optionally);
 * **menus** File / Network / Channel / View / Help and **right-click** menus
   on nicknames, channels, networks and the log;
 * **tooltips** when hovering icons, menus and buttons, in French or English;
   hovering a nickname shows a mini profile (role, account, host, away);
-* **18 themes**: Night, Ocean, Forest, Amethyst, Sakura, Dracula, Nord,
+* **19 themes**: Night, Ocean, Forest, Amethyst, Sakura, Dracula, Nord,
   Gruvbox, Monokai, Solarized Dark/Light, Midnight, Carbon, Cyberpunk, Paper,
-  Glacier, Rosé, Terminal — ◐ button or `Ctrl+T`;
+  Glacier, Rosé, Terminal, **Tux (Linux)** — ◐ button, `Ctrl+T` or
+  Preferences;
 * **300+ emojis** with FR/EN search and insertion at the cursor;
 * native notifications on mention/private message when the window is
-  inactive; **Linux system tray** (StatusNotifierItem), using a couch icon
-  like the application icon;
+  inactive, **configurable in-app toasts** (2/3/5 s) that can be disabled;
+  **Linux system tray** (StatusNotifierItem), using a couch icon like the
+  application icon;
 * closing with **X** keeps Le Salon in the tray; right-click the tray →
-  Show / Minimize / Notifications / Disconnect / **Quit**;
+  Show / Minimize / **Preferences** / Notifications / Disconnect / **Quit**;
 * “is typing…” indicator and unread count in the window title.
 
 #### Beyond plain text
@@ -406,15 +423,15 @@ Official binaries are published in the
 AppImage can also be produced locally at the application root:
 
 ```sh
-chmod +x Le-Salon-1.6.1-x86_64.AppImage
-./Le-Salon-1.6.1-x86_64.AppImage
+chmod +x Le-Salon-1.7.0-x86_64.AppImage
+./Le-Salon-1.7.0-x86_64.AppImage
 ```
 
 If Wayland causes trouble, AppRun automatically retries under XWayland. To
 force X11:
 
 ```sh
-LE_SALON_X11=1 ./Le-Salon-1.6.1-x86_64.AppImage
+LE_SALON_X11=1 ./Le-Salon-1.7.0-x86_64.AppImage
 ```
 
 The AppImage bundles the binary and the X11/xkb libraries; Vulkan, Wayland,
@@ -452,7 +469,7 @@ sudo apt install build-essential pkg-config \
 
 ```sh
 sh tools/build-appimage-le-salon.sh
-# → Le-Salon-1.6.1-x86_64.AppImage
+# → Le-Salon-1.7.0-x86_64.AppImage
 ```
 
 #### macOS
@@ -464,11 +481,11 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin
 sh tools/build-macos-app.sh
 ```
 
-The script produces `Le-Salon-1.6.1-macos-universal.zip` (arm64 + Intel)
+The script produces `Le-Salon-1.7.0-macos-universal.zip` (arm64 + Intel)
 with an ad-hoc signature. macOS blocks non-notarized apps on first launch:
 
 ```sh
-unzip Le-Salon-1.6.1-macos-universal.zip
+unzip Le-Salon-1.7.0-macos-universal.zip
 xattr -dr com.apple.quarantine "Le Salon.app"
 open "Le Salon.app"
 ```
@@ -523,6 +540,7 @@ Local commands:
 | Shortcut | Action |
 |---|---|
 | `Ctrl+T` (`Cmd+T` on macOS) | themes |
+| `Ctrl+P` | preferences |
 | `Ctrl+E` | emojis |
 | `Ctrl+N` | new network |
 | `Ctrl+F` | focus input |
@@ -552,6 +570,9 @@ Local commands:
   `LE_SALON_SASL_PASSWORD` over `--sasl-password` (visible in `ps`).
 * `config.toml` and `scheduled.json` are written as **0600** inside a
   **0700** directory. Details and limitations: [`SECURITY.md`](SECURITY.md).
+* The **Preferences** window only changes interface settings: it never
+  displays or modifies connection secrets. Toasts display message content and
+  can be disabled.
 * The X button minimizes Le Salon to the Linux tray; to quit, use the tray
   menu or **File → Quit**.
 

@@ -10,6 +10,7 @@ use ircv3_core::model::{BufferId, NetworkId};
 #[derive(Clone, Debug)]
 pub enum MenuAction {
     NewNetwork,
+    Preferences,
     Themes,
     SetLanguage(&'static str),
     ToggleNotifications,

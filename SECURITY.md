@@ -3,7 +3,7 @@
 ## Versions prises en charge
 
 Les correctifs de sécurité sont appliqués à la dernière version publiée
-(actuellement **1.6.1**) et à la branche `main`.
+(actuellement **1.7.0**) et à la branche `main`.
 
 ## Ce que Le Salon garantit par défaut
 
@@ -48,6 +48,11 @@ des vulnérabilités de Le Salon :
 - **Téléversement litterbox** : le fichier part chez `litterbox.catbox.moe`,
   reste 72 h et est accessible à toute personne ayant le lien. Une
   confirmation explicite est demandée, mais le service est public.
+- **Toasts et notifications** : les toasts in-app affichent le contenu des
+  messages pendant quelques secondes. Ils sont désactivables dans
+  *Préférences* ; les notifications système sont également désactivables.
+  Les textes sont nettoyés (codes mIRC, contrôles, caractères de direction)
+  avant affichage.
 - **Pas de bac à sable** : l'AppImage tourne avec les droits de l'utilisateur.
   Ne la lance jamais avec `sudo`/`root`. Pour isoler, utilise Flatpak ou
   Firejail.
@@ -79,7 +84,7 @@ Les AppImage sont construites par la CI GitHub à partir du tag correspondant.
 Compare le SHA-256 publié dans la note de release avec le fichier téléchargé :
 
 ```bash
-sha256sum Le-Salon-1.6.1-x86_64.AppImage
+sha256sum Le-Salon-1.7.0-x86_64.AppImage
 ```
 
 Ne télécharge les binaires que depuis la page officielle des releases.

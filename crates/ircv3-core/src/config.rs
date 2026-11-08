@@ -41,6 +41,14 @@ pub struct Config {
     /// Clé du thème (voir `theme::THEMES`).
     pub theme: String,
     pub notifications: bool,
+    /// Toasts affichés dans la fenêtre (2 à 5 secondes).
+    pub in_app_toasts: bool,
+    /// Durée d'affichage d'un toast, en secondes (1 à 10).
+    pub toast_seconds: u64,
+    /// Demander une confirmation avant un upload litterbox public.
+    pub confirm_upload: bool,
+    /// Ne notifier que les mentions et messages privés.
+    pub notify_mentions_only: bool,
     pub sidebar_width: f32,
     pub nick_width: f32,
 }
@@ -64,6 +72,10 @@ impl Default for Config {
             language: "auto".into(),
             theme: "nuit".into(),
             notifications: true,
+            in_app_toasts: true,
+            toast_seconds: 3,
+            confirm_upload: true,
+            notify_mentions_only: true,
             sidebar_width: 236.0,
             nick_width: 168.0,
         }
@@ -96,6 +108,10 @@ impl fmt::Debug for Config {
             .field("language", &self.language)
             .field("theme", &self.theme)
             .field("notifications", &self.notifications)
+            .field("in_app_toasts", &self.in_app_toasts)
+            .field("toast_seconds", &self.toast_seconds)
+            .field("confirm_upload", &self.confirm_upload)
+            .field("notify_mentions_only", &self.notify_mentions_only)
             .field("sidebar_width", &self.sidebar_width)
             .field("nick_width", &self.nick_width)
             .finish()
@@ -589,6 +605,17 @@ mod tests {
         .normalized();
         assert_eq!(secure.host, "irc.example.org");
         assert!(secure.tls);
+    }
+
+    #[test]
+    fn missing_preference_fields_use_secure_defaults() {
+        let config: Config = toml::from_str("nick = \"alice\"\n").unwrap();
+        assert!(config.in_app_toasts);
+        assert_eq!(config.toast_seconds, 3);
+        assert!(config.confirm_upload);
+        assert!(config.notify_mentions_only);
+        assert!(config.tls);
+        assert!(config.verify_tls);
     }
 
     #[test]

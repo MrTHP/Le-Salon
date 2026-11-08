@@ -554,6 +554,32 @@ pub static THEMES: &[Theme] = &[
             0x00ff66, 0x66ffcc, 0xffff66, 0xff66cc, 0xcc99ff, 0x66ddff, 0xffa500, 0xff5555,
         ],
     ),
+    make(
+        "tux",
+        "Tux (Linux)",
+        "Tux (Linux)",
+        0x0a0e14,
+        0x111820,
+        0x18222c,
+        0x0d131a,
+        0x2b3a46,
+        0xe6edf3,
+        0x93a4b5,
+        0x5f7285,
+        0xf5c542,
+        0x3a2f0b,
+        0xffd76a,
+        0x0a0e14,
+        0x7ee787,
+        0xf5c542,
+        0xff6b6b,
+        0xffa657,
+        0xc9a0ff,
+        0xff9bce,
+        [
+            0x7ee787, 0x79c0ff, 0xf5c542, 0xff9bce, 0xc9a0ff, 0x56d4dd, 0xffa657, 0xff6b6b,
+        ],
+    ),
 ];
 
 static CURRENT: AtomicUsize = AtomicUsize::new(0);

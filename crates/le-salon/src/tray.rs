@@ -12,6 +12,7 @@ use crate::i18n;
 pub enum TrayCommand {
     Show,
     Minimize,
+    Preferences,
     ToggleNotifications,
     DisconnectAll,
     Quit,
@@ -106,6 +107,14 @@ impl ksni::Tray for AppTray {
                 label: if fr { "Réduire" } else { "Minimize" }.into(),
                 activate: Box::new(|this: &mut Self| {
                     let _ = this.tx.send(TrayCommand::Minimize);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: if fr { "Préférences" } else { "Preferences" }.into(),
+                activate: Box::new(|this: &mut Self| {
+                    let _ = this.tx.send(TrayCommand::Preferences);
                 }),
                 ..Default::default()
             }

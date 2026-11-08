@@ -19,7 +19,7 @@ use gpui::{
 use ircv3_core::{
     APP_NAME, Config, ConnectionConfig, Lang,
     client::{self, NetworkHandle},
-    irc_fold, media,
+    formatting, irc_fold, media,
     model::{
         AppModel, BufferId, BufferKind, ChatLine, ConnectionStatus, DccStatus, LineKind, NetworkId,
         User,
@@ -33,6 +33,7 @@ use crate::{
     connect_form::{ConnectForm, ConnectFormEvent},
     emoji, i18n,
     menu::{MenuAction, MenuItem, PopupMenu},
+    preferences::{Preferences, PreferencesWindow},
     schedule::ScheduleStore,
     text_input::{TextInput, TextInputEvent},
     theme, tooltip,
@@ -70,6 +71,7 @@ actions!(
         FocusComposer,
         OpenThemes,
         OpenEmoji,
+        OpenPreferences,
         TabNext,
         TabPrev,
         GoToBuffer1,
@@ -93,6 +95,7 @@ pub fn install_bindings(cx: &mut App) {
         KeyBinding::new("secondary-f", FocusComposer, None),
         KeyBinding::new("secondary-t", OpenThemes, None),
         KeyBinding::new("secondary-e", OpenEmoji, None),
+        KeyBinding::new("secondary-p", OpenPreferences, None),
         KeyBinding::new("tab", TabNext, Some("FormInput")),
         KeyBinding::new("shift-tab", TabPrev, Some("FormInput")),
         KeyBinding::new("alt-1", GoToBuffer1, None),
@@ -182,6 +185,34 @@ struct PendingUpload {
     filename: String,
 }
 
+struct Toast {
+    id: u64,
+    title: String,
+    body: String,
+    expires_at: Instant,
+}
+
+/// Nettoie le texte affiché dans une notification : retire les codes mIRC,
+/// les contrôles et les caractères de direction Unicode.
+fn clean_notification_text(text: &str) -> String {
+    formatting::parse(text).text
+}
+
+/// Décide si un nouveau message mérite une notification.
+fn notification_relevant(kind: BufferKind, line: &ChatLine, mentions_only: bool) -> bool {
+    if kind == BufferKind::Server || line.self_nick {
+        return false;
+    }
+    let is_query = kind == BufferKind::Query;
+    let is_mention = line.mention;
+    let is_message = matches!(line.kind, LineKind::Message | LineKind::Action);
+    if mentions_only {
+        is_query || is_mention
+    } else {
+        is_query || is_mention || is_message
+    }
+}
+
 pub struct AppRoot {
     model: Arc<Mutex<AppModel>>,
     networks: HashMap<NetworkId, NetworkHandle>,
@@ -206,6 +237,9 @@ pub struct AppRoot {
     dcc_open: bool,
     schedule_open: bool,
     pending_upload: Option<PendingUpload>,
+    toasts: Vec<Toast>,
+    next_toast_id: u64,
+    preferences_window: Option<gpui::AnyWindowHandle>,
     emoji_search: Entity<TextInput>,
     _emoji_sub: Option<Subscription>,
     about_open: bool,
@@ -332,6 +366,9 @@ impl AppRoot {
             dcc_open: false,
             schedule_open: false,
             pending_upload: None,
+            toasts: Vec::new(),
+            next_toast_id: 1,
+            preferences_window: None,
             emoji_search,
             _emoji_sub: Some(emoji_sub),
             about_open: false,
@@ -382,6 +419,13 @@ impl AppRoot {
             });
             delayed.detach();
         }
+        if std::env::var_os("LE_SALON_PREFERENCES").is_some() {
+            let delayed = cx.spawn(async move |this, cx| {
+                gpui::Timer::after(Duration::from_millis(700)).await;
+                let _ = this.update(cx, |this, cx| this.open_preferences(cx));
+            });
+            delayed.detach();
+        }
         if std::env::var_os("LE_SALON_MENU").is_some() {
             let items = vec![
                 MenuItem::new("Ouvrir une conversation", MenuAction::Query("alice".into())),
@@ -423,6 +467,7 @@ impl AppRoot {
                         this.expire_status();
                         this.process_schedules(cx);
                         this.check_notifications(cx);
+                        this.expire_toasts();
                         this.process_tray(cx);
                         cx.notify();
                     })
@@ -560,6 +605,81 @@ impl AppRoot {
             ),
             cx,
         );
+    }
+
+    fn open_preferences(&mut self, cx: &mut Context<Self>) {
+        if let Some(handle) = self.preferences_window {
+            if handle
+                .update(cx, |_, window, _| window.activate_window())
+                .is_ok()
+            {
+                return;
+            }
+            self.preferences_window = None;
+        }
+
+        let prefs = Preferences::from_config(&self.config);
+        let (tx, rx) = async_channel::bounded(4);
+        let bounds = Bounds::centered(None, size(px(780.), px(760.)), cx);
+        let options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            titlebar: Some(TitlebarOptions {
+                title: Some(format!("{} — Le Salon", i18n::t("Préférences", "Preferences")).into()),
+                ..Default::default()
+            }),
+            app_id: Some("le-salon-preferences".into()),
+            window_min_size: Some(size(px(640.), px(560.))),
+            ..Default::default()
+        };
+        match cx.open_window(options, move |window, cx| {
+            cx.new(|cx| PreferencesWindow::new(window, cx, prefs, tx))
+        }) {
+            Ok(handle) => {
+                self.preferences_window = Some(handle.into());
+                cx.spawn(async move |this, cx| {
+                    while let Ok(prefs) = rx.recv().await {
+                        let _ = this.update(cx, |this, cx| {
+                            this.apply_preferences(prefs, cx);
+                        });
+                    }
+                })
+                .detach();
+            }
+            Err(error) => {
+                log::warn!("impossible d'ouvrir les préférences : {error}");
+                self.set_status(
+                    i18n::t(
+                        "Impossible d'ouvrir la fenêtre des préférences.",
+                        "Could not open the preferences window.",
+                    ),
+                    cx,
+                );
+            }
+        }
+    }
+
+    fn apply_preferences(&mut self, prefs: Preferences, cx: &mut Context<Self>) {
+        // La langue est appliquée en premier pour que les libellés des
+        // autres réglages soient déjà dans la bonne langue.
+        let lang = Lang::from_config(&prefs.language);
+        self.set_language(lang, cx);
+        prefs.apply_to(&mut self.config);
+        theme::set_theme_key(&self.config.theme);
+        if !self.config.in_app_toasts {
+            self.toasts.clear();
+        }
+        if let Err(error) = self.config.save() {
+            log::warn!("sauvegarde des préférences impossible : {error}");
+        }
+        {
+            let mut model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+            model.config = self.config.clone();
+        }
+        self.set_status(
+            i18n::t("Préférences enregistrées.", "Preferences saved."),
+            cx,
+        );
+        cx.notify();
     }
 
     fn open_form(&mut self, cx: &mut Context<Self>) {
@@ -1119,9 +1239,9 @@ impl AppRoot {
                                 "• DCC SEND, litterbox upload, scheduled messages"
                             })
                             .child(if i18n::is_fr() {
-                                "• 18 thèmes, info-bulles FR/EN, notifications et tray Linux"
+                                "• 19 thèmes, toasts, info-bulles FR/EN, notifications et tray Linux"
                             } else {
-                                "• 18 themes, FR/EN tooltips, notifications and Linux tray"
+                                "• 19 themes, toasts, FR/EN tooltips, notifications and Linux tray"
                             })
                             .child(if i18n::is_fr() {
                                 "• ircv3-core partagé, tests unitaires et bout en bout"
@@ -1435,6 +1555,15 @@ impl AppRoot {
         self.focus_emoji_search = true;
         self.should_focus_input = false;
         cx.notify();
+    }
+
+    fn open_preferences_action(
+        &mut self,
+        _: &OpenPreferences,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_preferences(cx);
     }
 
     fn tab_next(&mut self, _: &TabNext, window: &mut Window, _: &mut Context<Self>) {
@@ -2929,8 +3058,8 @@ impl AppRoot {
     ) -> AnyElement {
         let detail = match menu {
             TopMenu::File => i18n::t(
-                "Connexion, fichiers, planification, quitter",
-                "Connection, files, scheduling, quit",
+                "Connexion, préférences, fichiers, planification, quitter",
+                "Connection, preferences, files, scheduling, quit",
             ),
             TopMenu::Network => i18n::t(
                 "Reconnecter, déconnecter, rejoindre un salon",
@@ -2986,6 +3115,11 @@ impl AppRoot {
                     MenuAction::NewNetwork,
                 )
                 .shortcut("Ctrl+N"),
+                MenuItem::new(
+                    i18n::t("Préférences…", "Preferences…"),
+                    MenuAction::Preferences,
+                )
+                .shortcut("Ctrl+P"),
                 MenuItem::new(
                     i18n::t("Téléverser un fichier…", "Upload a file…"),
                     MenuAction::Upload,
@@ -3319,6 +3453,7 @@ impl AppRoot {
     fn run_menu_action(&mut self, action: MenuAction, cx: &mut Context<Self>) {
         match action {
             MenuAction::NewNetwork => self.open_form(cx),
+            MenuAction::Preferences => self.open_preferences(cx),
             MenuAction::Themes => {
                 self.theme_picker_open = true;
                 cx.notify();
@@ -3581,17 +3716,22 @@ impl AppRoot {
             .and_then(|name| name.to_str())
             .unwrap_or("fichier")
             .to_string();
-        // Le fichier n'est pas encore envoyé : on demande une confirmation
-        // explicite, car litterbox est un service public.
-        self.pending_upload = Some(PendingUpload {
+        let pending = PendingUpload {
             path,
             target,
             network_id,
             size,
             filename,
-        });
-        self.should_focus_input = false;
-        cx.notify();
+        };
+        if self.config.confirm_upload {
+            // Le fichier n'est pas encore envoyé : on demande une
+            // confirmation explicite, car litterbox est un service public.
+            self.pending_upload = Some(pending);
+            self.should_focus_input = false;
+            cx.notify();
+        } else {
+            self.confirm_upload(pending, cx);
+        }
     }
 
     fn confirm_upload(&mut self, pending: PendingUpload, cx: &mut Context<Self>) {
@@ -3865,6 +4005,7 @@ impl AppRoot {
                         window.minimize_window();
                     });
                 }
+                TrayCommand::Preferences => self.open_preferences(cx),
                 TrayCommand::ToggleNotifications => self.toggle_notifications(cx),
                 TrayCommand::DisconnectAll => {
                     for handle in self.networks.values() {
@@ -3889,7 +4030,7 @@ impl AppRoot {
         }
     }
 
-    fn check_notifications(&mut self, _cx: &mut Context<Self>) {
+    fn check_notifications(&mut self, cx: &mut Context<Self>) {
         if !self.notifications_ready {
             let model = self.model.lock().unwrap_or_else(|e| e.into_inner());
             for buffer in model.buffers.values() {
@@ -3898,42 +4039,179 @@ impl AppRoot {
             self.notifications_ready = true;
             return;
         }
+
         let mut updates = Vec::new();
-        let mut notifications = Vec::new();
+        let mut desktop = Vec::new();
+        let mut toasts = Vec::new();
         {
             let model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+            let active = model.active;
             for buffer in model.buffers.values() {
                 let previous = self.notify_seen.get(&buffer.id).copied().unwrap_or(0);
                 if buffer.version <= previous {
                     continue;
                 }
                 updates.push((buffer.id, buffer.version));
-                if !self.window_active
-                    && self.config.notifications
-                    && (buffer.kind == BufferKind::Query || buffer.highlight)
-                {
-                    if let Some(line) = buffer.messages.back() {
-                        let nick = line.nick.clone().unwrap_or_default();
-                        let (title, body) = if buffer.kind == BufferKind::Query {
-                            (
-                                format!("{} {nick}", i18n::t("Message de", "Message from")),
-                                line.text.clone(),
-                            )
-                        } else {
-                            (format!("{} — {nick}", buffer.name), line.text.clone())
-                        };
-                        let body: String = body.chars().take(180).collect();
-                        notifications.push((title, body));
-                    }
+                if buffer.kind == BufferKind::Server {
+                    continue;
+                }
+                let Some(line) = buffer.messages.back() else {
+                    continue;
+                };
+                if line.self_nick {
+                    continue;
+                }
+                // Ne pas afficher de toast pour le message qu'on est en
+                // train de lire dans la fenêtre active.
+                if self.window_active && active == Some(buffer.id) {
+                    continue;
+                }
+
+                // `line.mention` est propre au message ; ne pas se fier à
+                // `buffer.highlight`, qui reste vrai jusqu'à l'ouverture du
+                // salon et renotifierait chaque message suivant.
+                if !notification_relevant(buffer.kind, line, self.config.notify_mentions_only) {
+                    continue;
+                }
+                let is_query = buffer.kind == BufferKind::Query;
+
+                let nick = line.nick.clone().unwrap_or_default();
+                let (title, body) = if is_query {
+                    (
+                        format!("{} {nick}", i18n::t("Message de", "Message from")),
+                        line.text.clone(),
+                    )
+                } else {
+                    (format!("{} — {nick}", buffer.name), line.text.clone())
+                };
+                let title = clean_notification_text(&title);
+                let body: String = clean_notification_text(&body).chars().take(180).collect();
+
+                if self.config.in_app_toasts {
+                    toasts.push((title.clone(), body.clone()));
+                }
+                if self.config.notifications && !self.window_active {
+                    desktop.push((title, body));
                 }
             }
         }
+
         for (id, version) in updates {
             self.notify_seen.insert(id, version);
         }
-        for (title, body) in notifications {
+        for (title, body) in toasts {
+            self.push_toast(title, body);
+        }
+        for (title, body) in desktop {
             self.notify_desktop(&title, &body);
         }
+        if !self.toasts.is_empty() {
+            cx.notify();
+        }
+    }
+
+    fn push_toast(&mut self, title: String, body: String) {
+        let now = Instant::now();
+        self.toasts.retain(|toast| toast.expires_at > now);
+        if self.toasts.len() >= 4 {
+            self.toasts.remove(0);
+        }
+        let seconds = self.config.toast_seconds.clamp(1, 10);
+        self.toasts.push(Toast {
+            id: self.next_toast_id,
+            title,
+            body,
+            expires_at: now + Duration::from_secs(seconds),
+        });
+        self.next_toast_id = self.next_toast_id.wrapping_add(1).max(1);
+    }
+
+    fn expire_toasts(&mut self) {
+        let now = Instant::now();
+        self.toasts.retain(|toast| toast.expires_at > now);
+    }
+
+    fn render_toasts(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        if self.toasts.is_empty() {
+            return div();
+        }
+        let viewport = window.viewport_size();
+        let width = px(350.);
+        let left = (viewport.width - width - px(16.)).max(px(12.));
+        let mut rows: Vec<AnyElement> = Vec::new();
+        for toast in &self.toasts {
+            let id = toast.id;
+            rows.push(
+                div()
+                    .id(("toast", id as usize))
+                    .w_full()
+                    .flex()
+                    .items_start()
+                    .gap_3()
+                    .p_3()
+                    .rounded_md()
+                    .bg(theme::panel())
+                    .border_1()
+                    .border_color(theme::accent())
+                    .shadow_lg()
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            this.toasts.retain(|toast| toast.id != id);
+                            cx.notify();
+                        }),
+                    )
+                    .child(
+                        div()
+                            .mt(px(2.))
+                            .size(px(24.))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded_full()
+                            .bg(theme::accent_dark())
+                            .text_color(theme::accent())
+                            .text_size(px(12.))
+                            .child("●"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_size(px(11.5))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(theme::accent())
+                                    .truncate()
+                                    .child(toast.title.clone()),
+                            )
+                            .child(
+                                div()
+                                    .max_w_full()
+                                    .text_size(px(11.5))
+                                    .text_color(theme::text())
+                                    .line_clamp(3)
+                                    .child(toast.body.clone()),
+                            ),
+                    )
+                    .into_any_element(),
+            );
+        }
+        div()
+            .absolute()
+            .left(left)
+            .top(px(12.))
+            .w(width)
+            .flex()
+            .flex_col()
+            .gap_2()
+            .children(rows)
     }
 
     fn notify_desktop(&self, title: &str, body: &str) {
@@ -4876,6 +5154,7 @@ impl Render for AppRoot {
             .on_action(cx.listener(Self::focus_composer_action))
             .on_action(cx.listener(Self::open_themes_action))
             .on_action(cx.listener(Self::open_emoji_action))
+            .on_action(cx.listener(Self::open_preferences_action))
             .on_mouse_move(cx.listener(Self::on_root_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_root_mouse_up))
             .on_action(cx.listener(Self::tab_next))
@@ -4944,6 +5223,9 @@ impl Render for AppRoot {
         if self.popup.is_some() {
             root = root.child(self.render_popup(window, cx));
         }
+        if !self.toasts.is_empty() {
+            root = root.child(self.render_toasts(window, cx));
+        }
 
         if self.should_focus_input
             && self.form.is_none()
@@ -5008,6 +5290,39 @@ fn ordered_buffers_for(model: &AppModel, network_id: NetworkId) -> Vec<BufferId>
         })
     });
     ids
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn notification_text_is_sanitized() {
+        assert_eq!(
+            clean_notification_text("salut\u{202e} toi\u{01}"),
+            "salut toi"
+        );
+        assert_eq!(clean_notification_text("a\u{02}b\u{02}c"), "abc");
+    }
+
+    #[test]
+    fn notification_scope_is_respected() {
+        let mut line = ChatLine::new(LineKind::Message, Some("alice".into()), "salut");
+        assert!(!notification_relevant(BufferKind::Channel, &line, true));
+        assert!(notification_relevant(BufferKind::Channel, &line, false));
+        assert!(notification_relevant(BufferKind::Query, &line, true));
+
+        line.mention = true;
+        assert!(notification_relevant(BufferKind::Channel, &line, true));
+
+        line.kind = LineKind::Join;
+        line.mention = false;
+        assert!(!notification_relevant(BufferKind::Channel, &line, false));
+
+        line.kind = LineKind::Message;
+        line.self_nick = true;
+        assert!(!notification_relevant(BufferKind::Query, &line, false));
+    }
 }
 
 // Petit utilitaire pour les tests visuels éventuels.
