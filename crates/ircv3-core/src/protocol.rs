@@ -1508,16 +1508,13 @@ impl Session {
             None => (payload.to_ascii_uppercase(), ""),
         };
         match command.as_str() {
-            "VERSION" => vec![format!(
-                "NOTICE {from} :\u{01}VERSION {APP_NAME} {VERSION} (Rust + GPUI)\u{01}"
-            )],
+            // Ne pas divulguer la version exacte du client ni le fuseau
+            // horaire local à n'importe quel correspondant.
+            "VERSION" => vec![format!("NOTICE {from} :\u{01}VERSION {APP_NAME}\u{01}")],
             "PING" => vec![format!("NOTICE {from} :\u{01}PING {rest}\u{01}")],
-            "TIME" => vec![format!(
-                "NOTICE {from} :\u{01}TIME {}\u{01}",
-                Local::now().format("%Y-%m-%d %H:%M:%S %Z")
-            )],
+            "TIME" => Vec::new(),
             "CLIENTINFO" => vec![format!(
-                "NOTICE {from} :\u{01}CLIENTINFO ACTION VERSION PING TIME CLIENTINFO\u{01}"
+                "NOTICE {from} :\u{01}CLIENTINFO ACTION VERSION PING CLIENTINFO\u{01}"
             )],
             _ => Vec::new(),
         }
@@ -2545,6 +2542,21 @@ mod tests {
         assert_eq!(user.prefixes, "@+");
         assert_eq!(user.user.as_deref(), Some("a"));
         assert_eq!(user.host.as_deref(), Some("h"));
+    }
+
+    #[test]
+    fn ctcp_replies_do_not_leak_version_or_time() {
+        let (mut session, _) = session();
+        let replies = session.on_line(":alice!a@h PRIVMSG moi :\u{01}VERSION\u{01}");
+        assert!(replies.iter().any(|line| line.contains("VERSION Le Salon")));
+        assert!(
+            replies
+                .iter()
+                .all(|line| !line.contains(env!("CARGO_PKG_VERSION")))
+        );
+
+        let replies = session.on_line(":alice!a@h PRIVMSG moi :\u{01}TIME\u{01}");
+        assert!(replies.is_empty());
     }
 
     #[test]

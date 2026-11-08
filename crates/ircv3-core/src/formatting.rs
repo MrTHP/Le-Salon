@@ -171,12 +171,12 @@ pub fn parse(text: &str) -> FormattedText {
                 index += 1;
                 continue;
             }
-            '\t' | '\n' | '\r' => {
+            c @ ('\t' | '\n' | '\r' | '\u{2028}' | '\u{2029}') => {
                 out.push(' ');
-                index += 1;
+                index += c.len_utf8();
                 continue;
             }
-            c if c.is_control() => {
+            c if c.is_control() || is_bidi_control(c) => {
                 index += c.len_utf8();
                 continue;
             }
@@ -188,6 +188,19 @@ pub fn parse(text: &str) -> FormattedText {
     }
     flush(&out, &mut spans, &style, &mut span_start);
     FormattedText { text: out, spans }
+}
+
+/// Contrôles de direction Unicode : ils permettraient de retourner ou de
+/// réordonner visuellement le texte (usurpation d'un lien, d'un pseudo, etc.).
+pub(crate) fn is_bidi_control(c: char) -> bool {
+    matches!(
+        c,
+        '\u{061c}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}'
+    )
 }
 
 fn flush(out: &str, spans: &mut Vec<FormatSpan>, style: &StyleState, span_start: &mut usize) {
@@ -358,6 +371,14 @@ mod tests {
         assert_eq!(parsed.spans[0].range, 0..2);
         assert_eq!(parsed.spans[1].range, 2..4);
         assert!(parsed.spans[1].bold);
+    }
+
+    #[test]
+    fn bidi_controls_are_removed() {
+        let parsed = parse("abc\u{202e}def\u{2066}ghi\u{2069}");
+        assert_eq!(parsed.text, "abcdefghi");
+        let parsed = parse("a\u{2028}b\u{2029}c");
+        assert_eq!(parsed.text, "a b c");
     }
 
     #[test]

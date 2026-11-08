@@ -156,6 +156,32 @@ struct CompletionState {
     index: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PasswordPolicy {
+    /// Mémoriser le mot de passe du réseau courant.
+    Save,
+    /// Oublier le mot de passe du réseau courant.
+    Clear,
+    /// Ne rien changer au trousseau (connexion CLI ponctuelle).
+    Keep,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Persist {
+    /// Enregistrer aussi les réglages de sécurité (formulaire GUI).
+    All,
+    /// Ne pas persister TLS/vérification/mot de passe (CLI ponctuelle).
+    Session,
+}
+
+struct PendingUpload {
+    path: PathBuf,
+    target: String,
+    network_id: NetworkId,
+    size: u64,
+    filename: String,
+}
+
 pub struct AppRoot {
     model: Arc<Mutex<AppModel>>,
     networks: HashMap<NetworkId, NetworkHandle>,
@@ -179,6 +205,7 @@ pub struct AppRoot {
     focus_emoji_search: bool,
     dcc_open: bool,
     schedule_open: bool,
+    pending_upload: Option<PendingUpload>,
     emoji_search: Entity<TextInput>,
     _emoji_sub: Option<Subscription>,
     about_open: bool,
@@ -304,6 +331,7 @@ impl AppRoot {
             focus_emoji_search: false,
             dcc_open: false,
             schedule_open: false,
+            pending_upload: None,
             emoji_search,
             _emoji_sub: Some(emoji_sub),
             about_open: false,
@@ -370,7 +398,10 @@ impl AppRoot {
             root.popup = Some(PopupMenu::new(px(360.), px(240.), items));
         }
         if let Some(connection) = initial_connection {
-            root.connect(connection, cx);
+            // Les flags CLI (`--no-tls`, `--insecure`, `--sasl-password`) sont
+            // strictement limités à cette session : ils ne doivent jamais
+            // modifier la configuration persistante.
+            root.connect(connection, PasswordPolicy::Keep, Persist::Session, cx);
         }
         root
     }
@@ -437,29 +468,74 @@ impl AppRoot {
                 remember_password,
             } => {
                 self.config.remember_sasl_password = *remember_password;
-                if *remember_password {
-                    self.config.sasl_password =
-                        connection.sasl_password.clone().unwrap_or_default();
+                let password = if *remember_password {
+                    PasswordPolicy::Save
                 } else {
-                    self.config.sasl_password.clear();
-                }
-                self.connect(connection.clone(), cx)
+                    PasswordPolicy::Clear
+                };
+                self.connect(connection.clone(), password, Persist::All, cx)
             }
             ConnectFormEvent::Cancel => self.close_form(cx),
         }
     }
 
-    fn connect(&mut self, connection: ConnectionConfig, cx: &mut Context<Self>) {
+    fn connect(
+        &mut self,
+        connection: ConnectionConfig,
+        password_policy: PasswordPolicy,
+        persist: Persist,
+        cx: &mut Context<Self>,
+    ) {
         let connection = connection.normalized();
-        self.config.remember(&connection);
-        if self.config.remember_sasl_password {
-            if let Some(password) = &connection.sasl_password {
-                self.config.sasl_password = password.clone();
-            }
-        } else {
-            self.config.sasl_password.clear();
+        if let Err(error) = connection.security_check() {
+            self.set_status(error, cx);
+            self.should_focus_input = true;
+            return;
         }
-        if let Err(error) = self.config.save() {
+
+        // On mémorise l'ancien état de sécurité avant `remember` : une
+        // connexion CLI ne doit pas laisser TLS ou la vérification dans un
+        // état dangereux pour les lancements suivants.
+        let previous_tls = self.config.tls;
+        let previous_verify = self.config.verify_tls;
+        self.config.remember(&connection);
+        if persist == Persist::Session {
+            self.config.tls = previous_tls;
+            self.config.verify_tls = previous_verify;
+        }
+
+        match password_policy {
+            PasswordPolicy::Save => {
+                // Si le champ est vide, on ne doit surtout pas conserver le
+                // mot de passe d'un autre réseau.
+                self.config.sasl_password = connection.sasl_password.clone().unwrap_or_default();
+            }
+            PasswordPolicy::Clear => self.config.sasl_password.clear(),
+            PasswordPolicy::Keep => {
+                if persist == Persist::Session {
+                    // Ne jamais garder le mot de passe CLI en mémoire dans la
+                    // configuration : un changement de thème ou de langue
+                    // déclenche un `save()` qui le mémoriserait. On recharge
+                    // seulement le secret déjà stocké pour ce réseau, s'il
+                    // existe.
+                    let account = connection.sasl_account.clone().unwrap_or_default();
+                    self.config.sasl_password =
+                        ircv3_core::secrets::get(&connection.host, &account)
+                            .ok()
+                            .flatten()
+                            .unwrap_or_default();
+                }
+            }
+        }
+
+        let saved = if persist == Persist::Session {
+            // Ne jamais écrire le mot de passe CLI, ni écraser le secret du
+            // réseau dans le trousseau.
+            self.config.save_without_secret()
+        } else {
+            self.config.save()
+        };
+        if let Err(error) = saved {
             log::warn!("sauvegarde de la configuration impossible : {error}");
         }
         let network_id = {
@@ -826,6 +902,134 @@ impl AppRoot {
         self.rename_network = None;
         self.should_focus_input = true;
         cx.notify();
+    }
+
+    fn render_upload_confirm(&mut self, cx: &mut Context<Self>) -> Div {
+        let Some(pending) = &self.pending_upload else {
+            return div();
+        };
+        let filename = pending.filename.clone();
+        let size = upload::format_size(pending.size);
+        let target = pending.target.clone();
+
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgba(0x000000a8))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.pending_upload = None;
+                    this.should_focus_input = true;
+                    cx.notify();
+                }),
+            )
+            .child(
+                div()
+                    .w(px(560.))
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .p_6()
+                    .rounded_lg()
+                    .bg(theme::panel())
+                    .border_1()
+                    .border_color(theme::border())
+                    .shadow_lg()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .text_xl()
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .child(i18n::t(
+                                "Téléverser vers un service public ?",
+                                "Upload to a public service?",
+                            )),
+                    )
+                    .child(
+                        div()
+                            .rounded_md()
+                            .bg(theme::error_alpha(0.09))
+                            .border_1()
+                            .border_color(theme::error_alpha(0.33))
+                            .px_3()
+                            .py_2()
+                            .text_size(px(12.5))
+                            .text_color(theme::red())
+                            .child(i18n::t(
+                                "Le fichier sera envoyé à litterbox.catbox.moe, conservé 72 h et accessible à toute personne ayant le lien. N'envoie jamais de fichier sensible (clé SSH, mot de passe, document privé).",
+                                "The file will be sent to litterbox.catbox.moe, kept for 72 hours and accessible to anyone with the link. Never upload sensitive files (SSH keys, passwords, private documents).",
+                            )),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .text_size(px(12.5))
+                            .child(
+                                div()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(filename),
+                            )
+                            .child(
+                                div()
+                                    .text_color(theme::muted())
+                                    .child(format!(
+                                        "{size} · {} {target}",
+                                        i18n::t("vers", "to")
+                                    )),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_end()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .px_4()
+                                    .py_2()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::panel_alt()))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.pending_upload = None;
+                                            this.should_focus_input = true;
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(i18n::t("Annuler", "Cancel")),
+                            )
+                            .child(
+                                div()
+                                    .px_4()
+                                    .py_2()
+                                    .rounded_md()
+                                    .bg(theme::error_alpha(0.20))
+                                    .text_color(theme::red())
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::error_alpha(0.30)))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            if let Some(pending) = this.pending_upload.take() {
+                                                this.confirm_upload(pending, cx);
+                                            }
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(i18n::t("Téléverser", "Upload")),
+                            ),
+                    ),
+            )
     }
 
     fn render_about_dialog(&mut self, cx: &mut Context<Self>) -> Div {
@@ -2146,7 +2350,7 @@ impl AppRoot {
                                     MouseButton::Left,
                                     cx.listener(move |_, _, _, cx| cx.open_url(&url)),
                                 )
-                                .child(format!("{} {label}", link.kind.icon())),
+                                .child(format!("{} {} · {}", link.kind.icon(), label, link.host)),
                         )
                         .into_any_element(),
                 );
@@ -3377,12 +3581,33 @@ impl AppRoot {
             .and_then(|name| name.to_str())
             .unwrap_or("fichier")
             .to_string();
-        let Some(handle) = self.networks.get(&network_id) else {
+        // Le fichier n'est pas encore envoyé : on demande une confirmation
+        // explicite, car litterbox est un service public.
+        self.pending_upload = Some(PendingUpload {
+            path,
+            target,
+            network_id,
+            size,
+            filename,
+        });
+        self.should_focus_input = false;
+        cx.notify();
+    }
+
+    fn confirm_upload(&mut self, pending: PendingUpload, cx: &mut Context<Self>) {
+        let Some(handle) = self.networks.get(&pending.network_id) else {
             self.set_status(i18n::t("Réseau indisponible.", "Network unavailable."), cx);
             return;
         };
         let sender = handle.line_sender();
         let french = i18n::is_fr();
+        let PendingUpload {
+            path,
+            target,
+            size,
+            filename,
+            ..
+        } = pending;
         self.set_status(
             format!(
                 "⏳ {} {filename} ({}…)",
@@ -3717,6 +3942,7 @@ impl AppRoot {
             let _ = std::process::Command::new("notify-send")
                 .arg("--app-name=Le Salon")
                 .arg("--icon=le-salon")
+                .arg("--")
                 .arg(title)
                 .arg(body)
                 .spawn();
@@ -4418,8 +4644,8 @@ impl AppRoot {
                             .text_size(px(10.))
                             .text_color(theme::faint())
                             .child(i18n::t(
-                                "Le port DCC doit être joignable ; derrière un CGNAT, le transfert direct ne fonctionne pas.",
-                                "The DCC port must be reachable; behind CGNAT, direct transfer does not work.",
+                                "Le port DCC doit être joignable ; derrière un CGNAT, le transfert direct ne fonctionne pas. Le transfert n'est pas chiffré et le serveur IRC voit l'offre (IP/port) : n'envoie pas de fichier sensible.",
+                                "The DCC port must be reachable; behind CGNAT, direct transfer does not work. The transfer is unencrypted and the IRC server sees the offer (IP/port): do not send sensitive files.",
                             )),
                     ),
             )
@@ -4704,6 +4930,9 @@ impl Render for AppRoot {
         if self.about_open {
             root = root.child(self.render_about_dialog(cx));
         }
+        if self.pending_upload.is_some() {
+            root = root.child(self.render_upload_confirm(cx));
+        }
         if self.rename_open {
             if self.focus_rename_input {
                 self.focus_rename_input = false;
@@ -4724,6 +4953,7 @@ impl Render for AppRoot {
             && !self.schedule_open
             && !self.rename_open
             && !self.about_open
+            && self.pending_upload.is_none()
         {
             self.should_focus_input = false;
             let handle = self.input.read(cx).focus_handle(cx);

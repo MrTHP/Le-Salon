@@ -14,11 +14,11 @@ members = [
 ]
 
 [workspace.package]
-version = "1.6.0"
+version = "1.6.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 authors = ["ircv3-asm contributors"]
-repository = "https://github.com/ircv3-asm/ircv3-asm"
+repository = "https://github.com/MrTHP/Le-Salon"
 
 [workspace.dependencies]
 anyhow = "1"

@@ -5,7 +5,10 @@
 //!   `/schedule 18:30 texte`
 //!   `/schedule 2026-11-08 09:00 texte`
 
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use chrono::{DateTime, Duration, Local, NaiveDate, NaiveTime, TimeZone};
 use serde::{Deserialize, Serialize};
@@ -57,8 +60,10 @@ impl ScheduleStore {
                 if legacy.exists() {
                     if let Some(parent) = path.parent() {
                         let _ = fs::create_dir_all(parent);
+                        restrict_dir(parent);
                     }
                     let _ = fs::copy(&legacy, &path);
+                    restrict_file(&path);
                 }
             }
         }
@@ -77,9 +82,10 @@ impl ScheduleStore {
     pub fn save(&self) {
         if let Some(parent) = self.path.parent() {
             let _ = fs::create_dir_all(parent);
+            restrict_dir(parent);
         }
         if let Ok(text) = serde_json::to_string_pretty(&self.items) {
-            if let Err(error) = fs::write(&self.path, text) {
+            if let Err(error) = write_private(&self.path, &text) {
                 log::warn!("sauvegarde des messages planifiés impossible : {error}");
             }
         }
@@ -131,6 +137,46 @@ impl ScheduleStore {
             self.save();
         }
         due
+    }
+}
+
+fn restrict_dir(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o700));
+    }
+}
+
+fn restrict_file(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+    }
+}
+
+fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(text.as_bytes())?;
+        // `mode` ne s'applique qu'à la création : on force aussi le mode si
+        // le fichier existait déjà avec des permissions trop larges.
+        restrict_file(path);
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(path, text)
     }
 }
 
@@ -265,5 +311,26 @@ mod tests {
     fn parses_full_date() {
         let (text, _) = parse_command("2026-11-08 09:00 demain").unwrap();
         assert_eq!(text, "demain");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scheduled_file_is_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "le-salon-schedule-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("scheduled.json");
+        write_private(&path, "[]").unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        let _ = fs::remove_dir_all(dir);
     }
 }

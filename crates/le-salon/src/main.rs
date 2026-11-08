@@ -111,12 +111,15 @@ fn print_help() {
            -n, --nick PSEUDO        pseudo\n\
            -c, --channel #salon     salons à rejoindre (virgules)\n\
            -U, --sasl-user COMPTE   compte SASL PLAIN\n\
-           -P, --sasl-password MDP  mot de passe SASL (non enregistré)\n\
-               --tls / --no-tls     activer/désactiver TLS\n\
-           -k, --insecure           ne pas vérifier le certificat TLS\n\
+           -P, --sasl-password MDP  mot de passe SASL (cette session ; préférer LE_SALON_SASL_PASSWORD)\n\
+               --tls / --no-tls     activer/désactiver TLS (cette session)\n\
+           -k, --insecure           ne pas vérifier le certificat (cette session ; SASL refusé)\n\
                --x11                forcer le backend X11 (au lieu de Wayland)\n\
            -V, --version            afficher la version\n\
-           -h, --help               afficher cette aide"
+           -h, --help               afficher cette aide\n\
+         \n\
+         Sécurité : SASL exige TLS et la vérification du certificat.\n\
+         Les options --no-tls, --insecure et --sasl-password ne sont pas enregistrées."
     );
 }
 
@@ -141,16 +144,24 @@ fn main() {
         }
     }
 
+    // Préférer la variable d'environnement au flag : un mot de passe passé en
+    // argument est visible dans `ps` par les autres utilisateurs locaux.
+    let cli_sasl_password = cli
+        .sasl_password
+        .clone()
+        .or_else(|| env::var("LE_SALON_SASL_PASSWORD").ok());
+
     let initial = cli.server.as_ref().map(|server| {
         let config = Config::load();
-        let mut connection = config.connection(cli.sasl_password.clone());
+        // Ne jamais réutiliser aveuglément le secret du dernier réseau : on
+        // charge uniquement celui du couple (hôte, compte) demandé.
+        let mut connection = config.connection_without_secret();
         connection.host = server.clone();
         connection.nick = cli.nick.clone().unwrap_or(connection.nick);
         connection.user = connection.nick.clone();
         if let Some(tls) = cli.tls {
             connection.tls = tls;
         }
-        connection.port = cli.port.unwrap_or(if connection.tls { 6697 } else { 6667 });
         connection.verify_tls = !cli.insecure;
         if let Some(channels) = &cli.channels {
             connection.channels = parse_channels(channels);
@@ -158,11 +169,26 @@ fn main() {
         if let Some(user) = cli.sasl_user.clone() {
             connection.sasl_account = Some(user);
         }
-        if cli.sasl_password.is_some() {
-            connection.sasl_password = cli.sasl_password.clone();
+        connection = connection.normalized();
+        connection.port = cli.port.unwrap_or(if connection.tls { 6697 } else { 6667 });
+        if let Some(password) = cli_sasl_password.clone() {
+            // Flag/env ponctuel : jamais écrit dans la configuration.
+            connection.sasl_password = Some(password);
+        } else if connection.has_sasl() {
+            let account = connection.sasl_account.clone().unwrap_or_default();
+            connection.sasl_password = ircv3_core::secrets::get(&connection.host, &account)
+                .ok()
+                .flatten();
         }
-        connection.normalized()
+        connection
     });
+
+    if let Some(connection) = &initial
+        && let Err(error) = connection.security_check()
+    {
+        eprintln!("{error}");
+        std::process::exit(2);
+    }
 
     Application::new()
         .with_assets(assets::Assets)

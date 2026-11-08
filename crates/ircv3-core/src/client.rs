@@ -167,6 +167,16 @@ fn run(
     rx: mpsc::Receiver<ThreadCommand>,
 ) {
     let mut session = Session::new(network_id, config.clone(), model, wake);
+
+    // Dernière barrière avant le réseau : même un appel direct à `spawn`
+    // (exemple `probe`, test, futur client) ne peut pas envoyer un mot de
+    // passe SASL dans un canal non sûr.
+    if let Err(error) = config.security_check() {
+        session.set_status(ConnectionStatus::Disconnected, error.clone());
+        session.local_error(error);
+        return;
+    }
+
     let mut should_connect = true;
     let mut auto_reconnect = config.auto_reconnect;
     let mut attempts = 0u32;

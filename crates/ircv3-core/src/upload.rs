@@ -62,7 +62,8 @@ pub fn upload_file(path: &Path) -> Result<String, String> {
         })?;
     let status = response.status();
     let text = response.text().unwrap_or_default().trim().to_string();
-    if !status.is_success() || !(text.starts_with("http://") || text.starts_with("https://")) {
+    // Un lien public doit être HTTPS : on refuse un retour en clair.
+    if !status.is_success() || !text.starts_with("https://") {
         return Err(if crate::i18n::lang() == crate::i18n::Lang::En {
             format!(
                 "server response {status}: {}",

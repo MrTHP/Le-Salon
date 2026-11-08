@@ -7,7 +7,7 @@
 //! permissions 0600.
 
 use std::{
-    fs,
+    fmt, fs,
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
 };
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{irc_fold, secrets};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     pub nick: String,
@@ -70,6 +70,38 @@ impl Default for Config {
     }
 }
 
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Config")
+            .field("nick", &self.nick)
+            .field("user", &self.user)
+            .field("realname", &self.realname)
+            .field("server", &self.server)
+            .field("port", &self.port)
+            .field("tls", &self.tls)
+            .field("verify_tls", &self.verify_tls)
+            .field("sasl_account", &self.sasl_account)
+            .field(
+                "sasl_password",
+                &if self.sasl_password.is_empty() {
+                    "<empty>"
+                } else {
+                    "<redacted>"
+                },
+            )
+            .field("remember_sasl_password", &self.remember_sasl_password)
+            .field("channels", &self.channels)
+            .field("auto_reconnect", &self.auto_reconnect)
+            .field("connect_on_start", &self.connect_on_start)
+            .field("language", &self.language)
+            .field("theme", &self.theme)
+            .field("notifications", &self.notifications)
+            .field("sidebar_width", &self.sidebar_width)
+            .field("nick_width", &self.nick_width)
+            .finish()
+    }
+}
+
 impl Config {
     pub fn path() -> PathBuf {
         dirs::config_dir()
@@ -98,15 +130,7 @@ impl Config {
                             legacy.display(),
                             path.display()
                         );
-                        if let Some(parent) = path.parent() {
-                            let _ = fs::create_dir_all(parent);
-                        }
-                        let _ = fs::write(&path, &text);
-                        #[cfg(unix)]
-                        {
-                            use std::os::unix::fs::PermissionsExt;
-                            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
-                        }
+                        let _ = Self::write_text(&path, &text);
                         text
                     }
                     Err(error) => {
@@ -131,10 +155,12 @@ impl Config {
     /// Recharge le mot de passe depuis le trousseau système, ou migre un
     /// éventuel mot de passe encore présent en clair dans le fichier.
     fn restore_secret(&mut self) {
+        let host = self.server.clone();
+        let account = self.sasl_account.clone();
         if !self.remember_sasl_password {
             self.sasl_password.clear();
-            // Efface une entrée laissée par une session précédente.
-            if let Err(error) = secrets::forget() {
+            // Efface l'entrée de ce réseau, sans toucher aux autres.
+            if let Err(error) = secrets::forget(&host, &account) {
                 log::debug!("suppression du mot de passe SASL impossible : {error}");
             }
             return;
@@ -142,7 +168,7 @@ impl Config {
         if !self.sasl_password.is_empty() {
             // Ancienne configuration (ou repli) : on déplace le secret vers
             // le trousseau, puis on réécrit le fichier sans le mot de passe.
-            match secrets::store(&self.sasl_password) {
+            match secrets::store(&host, &account, &self.sasl_password) {
                 Ok(()) => {
                     log::info!("mot de passe SASL migré vers le trousseau système");
                     let mut flushed = self.clone();
@@ -155,9 +181,23 @@ impl Config {
             }
             return;
         }
-        match secrets::get() {
+        match secrets::get(&host, &account) {
             Ok(Some(password)) => self.sasl_password = password,
-            Ok(None) => {}
+            Ok(None) => {
+                // Migration de l'ancienne entrée unique (≤ 1.6.0).
+                match secrets::get_legacy() {
+                    Ok(Some(password)) => {
+                        if secrets::store(&host, &account, &password).is_ok() {
+                            let _ = secrets::forget_legacy();
+                        }
+                        self.sasl_password = password;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        log::debug!("lecture du trousseau système impossible : {error}")
+                    }
+                }
+            }
             Err(error) => log::debug!("lecture du trousseau système impossible : {error}"),
         }
     }
@@ -166,19 +206,34 @@ impl Config {
         let mut saved = self.clone();
         if saved.remember_sasl_password {
             if !saved.sasl_password.is_empty() {
-                match secrets::store(&saved.sasl_password) {
+                match secrets::store(&saved.server, &saved.sasl_account, &saved.sasl_password) {
                     // Le secret est dans le trousseau : il ne doit pas
                     // apparaître dans le fichier.
                     Ok(()) => saved.sasl_password.clear(),
                     Err(error) => Self::warn_plaintext_fallback(&error),
                 }
+            } else {
+                // Un mot de passe volontairement vidé ne doit pas ressusciter
+                // depuis le trousseau au prochain lancement.
+                if let Err(error) = secrets::forget(&saved.server, &saved.sasl_account) {
+                    log::debug!("suppression du mot de passe SASL impossible : {error}");
+                }
             }
         } else {
-            if let Err(error) = secrets::forget() {
+            if let Err(error) = secrets::forget(&saved.server, &saved.sasl_account) {
                 log::debug!("suppression du mot de passe SASL impossible : {error}");
             }
             saved.sasl_password.clear();
         }
+        Self::write(&Self::path(), &saved)
+    }
+
+    /// Sauvegarde sans jamais toucher au trousseau ni écrire de secret.
+    /// Utilisé pour les connexions lancées en ligne de commande : un
+    /// `--sasl-password` ponctuel ne doit pas être mémorisé.
+    pub fn save_without_secret(&self) -> std::io::Result<()> {
+        let mut saved = self.clone();
+        saved.sasl_password.clear();
         Self::write(&Self::path(), &saved)
     }
 
@@ -194,6 +249,14 @@ impl Config {
     }
 
     fn write(path: &Path, config: &Config) -> std::io::Result<()> {
+        let text = toml::to_string_pretty(config).map_err(std::io::Error::other)?;
+        Self::write_text(path, &text)
+    }
+
+    /// Écrit un fichier privé en s'assurant que le dossier est en 0700 et que
+    /// le fichier est créé en 0600, sans passer par un fichier temporaire
+    /// world-readable.
+    fn write_text(path: &Path, text: &str) -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
             #[cfg(unix)]
@@ -202,12 +265,24 @@ impl Config {
                 let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
             }
         }
-        let text = toml::to_string_pretty(config).map_err(std::io::Error::other)?;
-        fs::write(path, text)?;
         #[cfg(unix)]
         {
+            use std::io::Write as _;
+            use std::os::unix::fs::OpenOptionsExt;
+
+            let mut file = fs::OpenOptions::new()
+                .create(true)
+                .truncate(true)
+                .write(true)
+                .mode(0o600)
+                .open(path)?;
+            file.write_all(text.as_bytes())?;
             use std::os::unix::fs::PermissionsExt;
             fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        }
+        #[cfg(not(unix))]
+        {
+            fs::write(path, text)?;
         }
         Ok(())
     }
@@ -254,6 +329,12 @@ impl Config {
         }
     }
 
+    /// Construit une connexion sans réutiliser le mot de passe mémorisé.
+    /// L'appelant peut ensuite charger le secret du réseau demandé.
+    pub fn connection_without_secret(&self) -> ConnectionConfig {
+        self.connection(Some(String::new()))
+    }
+
     pub fn remember(&mut self, connection: &ConnectionConfig) {
         self.nick = connection.nick.clone();
         self.user = connection.user.clone();
@@ -268,7 +349,7 @@ impl Config {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ConnectionConfig {
     pub host: String,
     pub port: u16,
@@ -283,6 +364,31 @@ pub struct ConnectionConfig {
     pub auto_reconnect: bool,
 }
 
+impl fmt::Debug for ConnectionConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ConnectionConfig")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("tls", &self.tls)
+            .field("verify_tls", &self.verify_tls)
+            .field("nick", &self.nick)
+            .field("user", &self.user)
+            .field("realname", &self.realname)
+            .field("sasl_account", &self.sasl_account)
+            .field(
+                "sasl_password",
+                &if self.sasl_password.is_some() {
+                    "<redacted>"
+                } else {
+                    "<none>"
+                },
+            )
+            .field("channels", &self.channels)
+            .field("auto_reconnect", &self.auto_reconnect)
+            .finish()
+    }
+}
+
 impl ConnectionConfig {
     pub fn endpoint(&self) -> String {
         format!("{}:{}", self.host, self.port)
@@ -294,14 +400,48 @@ impl ConnectionConfig {
             .is_some_and(|account| !account.is_empty())
     }
 
+    /// Refuse les combinaisons qui exposeraient le mot de passe SASL.
+    ///
+    /// Le mot de passe SASL PLAIN doit toujours circuler dans un tunnel TLS
+    /// dont le certificat est vérifié. La vérification est une défense
+    /// indispensable contre un MITM actif : sans elle, TLS ne protège pas
+    /// contre une attaque de l'homme du milieu.
+    pub fn security_check(&self) -> Result<(), String> {
+        if self.has_sasl() && !self.tls {
+            return Err(crate::i18n::t(
+                "SASL sans TLS est interdit : le mot de passe serait envoyé en clair. Activez TLS ou videz le compte SASL.",
+                "SASL without TLS is not allowed: the password would be sent in clear text. Enable TLS or clear the SASL account.",
+            )
+            .into());
+        }
+        if self.has_sasl() && !self.verify_tls {
+            return Err(crate::i18n::t(
+                "SASL avec un certificat non vérifié est interdit : un MITM pourrait voler le mot de passe. Activez la vérification du certificat.",
+                "SASL with certificate verification disabled is not allowed: a MITM could steal the password. Enable certificate verification.",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
     pub fn normalized(mut self) -> Self {
         self.host = self.host.trim().to_string();
-        if let Some(host) = self.host.strip_prefix("ircs://") {
-            self.host = host.trim_end_matches('/').to_string();
+        // `ircs://` ne peut que renforcer la sécurité. `irc://` ne doit
+        // jamais désactiver TLS dans le dos de l'utilisateur : c'est la case
+        // « Connexion TLS » qui fait foi.
+        if self
+            .host
+            .get(..7)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("ircs://"))
+        {
+            self.host = self.host[7..].trim_end_matches('/').to_string();
             self.tls = true;
-        } else if let Some(host) = self.host.strip_prefix("irc://") {
-            self.host = host.trim_end_matches('/').to_string();
-            self.tls = false;
+        } else if self
+            .host
+            .get(..6)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("irc://"))
+        {
+            self.host = self.host[6..].trim_end_matches('/').to_string();
         }
         if self.port == 0 {
             self.port = if self.tls { 6697 } else { 6667 };
@@ -379,6 +519,76 @@ mod tests {
         assert_eq!(connection.nick, "moi");
         assert_eq!(connection.user, "moi");
         assert_eq!(connection.channels, vec!["#test"]);
+    }
+
+    fn connection(tls: bool, verify_tls: bool, sasl_account: Option<&str>) -> ConnectionConfig {
+        ConnectionConfig {
+            host: "irc.example.org".into(),
+            port: 6697,
+            tls,
+            verify_tls,
+            nick: "moi".into(),
+            user: "moi".into(),
+            realname: "Moi".into(),
+            sasl_account: sasl_account.map(str::to_string),
+            sasl_password: sasl_account.map(|_| "secret".to_string()),
+            channels: Vec::new(),
+            auto_reconnect: true,
+        }
+    }
+
+    #[test]
+    fn sasl_requires_tls_and_certificate_verification() {
+        assert!(connection(true, true, Some("moi")).security_check().is_ok());
+        assert!(connection(true, true, None).security_check().is_ok());
+        assert!(connection(true, false, None).security_check().is_ok());
+        assert!(
+            connection(false, true, Some("moi"))
+                .security_check()
+                .is_err()
+        );
+        assert!(
+            connection(true, false, Some("moi"))
+                .security_check()
+                .is_err()
+        );
+        assert!(
+            connection(false, false, Some("moi"))
+                .security_check()
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn irc_scheme_does_not_disable_tls() {
+        let unchanged = ConnectionConfig {
+            host: "irc://irc.example.org".into(),
+            tls: true,
+            ..connection(true, true, None)
+        }
+        .normalized();
+        assert_eq!(unchanged.host, "irc.example.org");
+        assert!(unchanged.tls);
+
+        let explicit_plain = ConnectionConfig {
+            host: "irc://irc.example.org".into(),
+            tls: false,
+            ..connection(false, true, None)
+        }
+        .normalized();
+        assert!(!explicit_plain.tls);
+    }
+
+    #[test]
+    fn ircs_scheme_forces_tls() {
+        let secure = ConnectionConfig {
+            host: "IRCS://irc.example.org/".into(),
+            tls: false,
+            ..connection(false, true, None)
+        }
+        .normalized();
+        assert_eq!(secure.host, "irc.example.org");
+        assert!(secure.tls);
     }
 
     #[test]

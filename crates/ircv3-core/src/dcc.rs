@@ -47,13 +47,17 @@ pub fn start_send(
             .and_then(|name| name.to_str())
             .unwrap_or("fichier"),
     );
-    let listener = TcpListener::bind(("0.0.0.0", 0))
-        .map_err(|error| format!("impossible d'ouvrir le port DCC : {error}"))?;
+    let ip = local_ipv4();
+    // On n'écoute que sur l'interface locale annoncée dans l'offre : le port
+    // n'est pas exposé sur toutes les interfaces de la machine. Le premier
+    // pair qui se connecte reçoit le fichier, comme le veut DCC ; c'est
+    // pourquoi l'offre doit rester privée et le fichier non sensible.
+    let listener = TcpListener::bind((ip, 0))
+        .map_err(|error| format!("impossible d'ouvrir le port DCC sur {ip} : {error}"))?;
     let port = listener
         .local_addr()
         .map_err(|error| format!("adresse DCC illisible : {error}"))?
         .port();
-    let ip = local_ipv4();
     let cancel = Arc::new(AtomicBool::new(false));
     let transfer = DccTransfer {
         id: 0,
@@ -358,7 +362,7 @@ mod tests {
         assert_eq!(size, data.len() as u64);
         assert!(ip > 0);
 
-        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let mut stream = TcpStream::connect((Ipv4Addr::from(ip), port)).unwrap();
         let mut received = Vec::new();
         stream.read_to_end(&mut received).unwrap();
         assert_eq!(received, data);

@@ -6,7 +6,7 @@
 [![GPUI](https://img.shields.io/badge/UI-GPUI-blue)](https://gpui.rs/)
 [![Linux](https://img.shields.io/badge/Linux-AppImage-success?logo=linux)](https://appimage.org/)
 [![macOS](https://img.shields.io/badge/macOS-universal-lightgrey?logo=apple)](https://www.apple.com/macos/)
-[![Version](https://img.shields.io/badge/version-1.6.0-informational)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-1.6.1-informational)](Cargo.toml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#licence)
 
 **🇫🇷 [Français](#français) · 🇬🇧 [English](#english)**
@@ -120,15 +120,15 @@ navigateur embarqué.
 L’AppImage Linux est produite à la racine de l’application :
 
 ```sh
-chmod +x Le-Salon-1.6.0-x86_64.AppImage
-./Le-Salon-1.6.0-x86_64.AppImage
+chmod +x Le-Salon-1.6.1-x86_64.AppImage
+./Le-Salon-1.6.1-x86_64.AppImage
 ```
 
 Si Wayland pose problème, l’AppRun retente automatiquement sous XWayland.
 Pour forcer X11 :
 
 ```sh
-LE_SALON_X11=1 ./Le-Salon-1.6.0-x86_64.AppImage
+LE_SALON_X11=1 ./Le-Salon-1.6.1-x86_64.AppImage
 ```
 
 L’AppImage embarque le binaire et les bibliothèques X11/xkb ; Vulkan, Wayland,
@@ -166,7 +166,7 @@ sudo apt install build-essential pkg-config \
 
 ```sh
 sh tools/build-appimage-le-salon.sh
-# → Le-Salon-1.6.0-x86_64.AppImage
+# → Le-Salon-1.6.1-x86_64.AppImage
 ```
 
 #### macOS
@@ -178,12 +178,12 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin
 sh tools/build-macos-app.sh
 ```
 
-Le script produit `Le-Salon-1.6.0-macos-universal.zip` (arm64 + Intel) avec
+Le script produit `Le-Salon-1.6.1-macos-universal.zip` (arm64 + Intel) avec
 une signature ad-hoc. macOS bloque les applications non notariées au premier
 lancement :
 
 ```sh
-unzip Le-Salon-1.6.0-macos-universal.zip
+unzip Le-Salon-1.6.1-macos-universal.zip
 xattr -dr com.apple.quarantine "Le Salon.app"
 open "Le Salon.app"
 ```
@@ -253,12 +253,21 @@ Fonctions locales :
   existante dans `~/.config/ircv3-gpui/` est migrée automatiquement au premier
   lancement pour ne pas perdre les réglages.
 * Messages planifiés : `~/.config/le-salon/scheduled.json`.
+* **Sécurité par défaut** : TLS et vérification du certificat activés.
+  **SASL PLAIN exige TLS + certificat vérifié** ; une configuration SASL sans
+  TLS est refusée avant toute connexion.
 * Le mot de passe SASL n’est mémorisé **que si la case « Mémoriser le mot de
   passe SASL » est cochée**. Il est alors confié au trousseau système
   (Secret Service sous Linux, Keychain sous macOS, Credential Manager sous
-  Windows) et n’apparaît pas dans le fichier de configuration. Si aucun
-  trousseau n’est disponible, il est conservé en clair dans le fichier de
-  configuration, avec des permissions **0600**.
+  Windows), **indexé par réseau `(hôte, compte)`**, et n’apparaît pas dans le
+  fichier de configuration. Si aucun trousseau n’est disponible, il est
+  conservé en clair dans le fichier de configuration, avec des permissions
+  **0600**. Le champ est effacé dès que l’hôte ou le compte change.
+* `--no-tls`, `--insecure` et `--sasl-password` sont **strictement limités à
+  la session** et ne modifient pas la configuration persistante. Préférer
+  `LE_SALON_SASL_PASSWORD` à `--sasl-password` (visible dans `ps`).
+* `config.toml` et `scheduled.json` sont écrits en **0600** dans un dossier
+  **0700**. Détails et limites : [`SECURITY.md`](SECURITY.md).
 * Le bouton X minimise Le Salon dans la barre système Linux ; pour quitter,
   utiliser le menu du tray ou **Fichier → Quitter**.
 
@@ -393,15 +402,15 @@ framework: GPU rendering, fast startup, no Electron and no embedded browser.
 The Linux AppImage is produced at the application root:
 
 ```sh
-chmod +x Le-Salon-1.6.0-x86_64.AppImage
-./Le-Salon-1.6.0-x86_64.AppImage
+chmod +x Le-Salon-1.6.1-x86_64.AppImage
+./Le-Salon-1.6.1-x86_64.AppImage
 ```
 
 If Wayland causes trouble, AppRun automatically retries under XWayland. To
 force X11:
 
 ```sh
-LE_SALON_X11=1 ./Le-Salon-1.6.0-x86_64.AppImage
+LE_SALON_X11=1 ./Le-Salon-1.6.1-x86_64.AppImage
 ```
 
 The AppImage bundles the binary and the X11/xkb libraries; Vulkan, Wayland,
@@ -439,7 +448,7 @@ sudo apt install build-essential pkg-config \
 
 ```sh
 sh tools/build-appimage-le-salon.sh
-# → Le-Salon-1.6.0-x86_64.AppImage
+# → Le-Salon-1.6.1-x86_64.AppImage
 ```
 
 #### macOS
@@ -451,11 +460,11 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin
 sh tools/build-macos-app.sh
 ```
 
-The script produces `Le-Salon-1.6.0-macos-universal.zip` (arm64 + Intel)
+The script produces `Le-Salon-1.6.1-macos-universal.zip` (arm64 + Intel)
 with an ad-hoc signature. macOS blocks non-notarized apps on first launch:
 
 ```sh
-unzip Le-Salon-1.6.0-macos-universal.zip
+unzip Le-Salon-1.6.1-macos-universal.zip
 xattr -dr com.apple.quarantine "Le Salon.app"
 open "Le Salon.app"
 ```
@@ -525,11 +534,20 @@ Local commands:
   `~/.config/ircv3-gpui/` is migrated automatically on first launch so no
   settings are lost.
 * Scheduled messages: `~/.config/le-salon/scheduled.json`.
+* **Secure defaults**: TLS and certificate verification are enabled.
+  **SASL PLAIN requires TLS + a verified certificate**; SASL without TLS is
+  refused before any network connection.
 * The SASL password is remembered **only if “Remember SASL password” is
   checked**. It is then kept in the system keyring (Secret Service on Linux,
-  Keychain on macOS, Credential Manager on Windows) and does not appear in
-  the config file. If no keyring is available, it falls back to plain text in
-  the config file with **0600** permissions.
+  Keychain on macOS, Credential Manager on Windows), **indexed per network
+  `(host, account)`**, and does not appear in the config file. If no keyring
+  is available, it falls back to plain text in the config file with **0600**
+  permissions. The field is cleared as soon as the host or account changes.
+* `--no-tls`, `--insecure` and `--sasl-password` are **session-only** and do
+  not modify the persistent configuration. Prefer
+  `LE_SALON_SASL_PASSWORD` over `--sasl-password` (visible in `ps`).
+* `config.toml` and `scheduled.json` are written as **0600** inside a
+  **0700** directory. Details and limitations: [`SECURITY.md`](SECURITY.md).
 * The X button minimizes Le Salon to the Linux tray; to quit, use the tray
   menu or **File → Quit**.
 

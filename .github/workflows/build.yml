@@ -5,7 +5,25 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
+  security:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: .
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Audit des dépendances
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
+
   linux:
     runs-on: ubuntu-24.04
     steps:

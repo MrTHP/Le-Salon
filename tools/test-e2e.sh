@@ -1,6 +1,7 @@
 #!/bin/sh
 # Test de bout en bout du socle ircv3-core contre tools/fake_ircd.py.
-# Couvre : TCP clair, TLS auto-signé, SASL PLAIN, CAP, JOIN, messages.
+# Couvre : TCP clair, TLS auto-signé, CAP, JOIN, messages et refus de SASL
+# sans TLS.
 set -eu
 APP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 REPO_ROOT="$(cd "$APP_ROOT/.." && pwd)"
@@ -43,6 +44,18 @@ run_case() {
 
 run_case clair 6680 "" "--no-tls" "Sujet : Salon de test"
 run_case tls 6690 "--tls" "--tls --insecure" "Sujet : Salon de test"
-run_case sasl 6681 "" "--no-tls --sasl-user compte --sasl-pass secret" "SASL : authentification réussie"
+
+echo "== cas : refus SASL sans TLS (port 6681) =="
+python3 "$REPO_ROOT/tools/fake_ircd.py" 6681 \
+  > "/tmp/opencode/ircv3-e2e-sasl-refus.log" 2>&1 &
+PIDS="$PIDS $!"
+sleep 0.6
+timeout 14 ./target/debug/examples/probe \
+  --host 127.0.0.1 --port 6681 --nick probe --channel '#test' \
+  --seconds 3 --no-tls --sasl-user compte --sasl-pass secret \
+  > "/tmp/opencode/ircv3-probe-sasl-refus.log" 2>&1 || true
+grep -q "SASL" "/tmp/opencode/ircv3-probe-sasl-refus.log"
+grep -q "TLS" "/tmp/opencode/ircv3-probe-sasl-refus.log"
+echo "   OK"
 
 echo "Tous les tests de bout en bout sont passés."

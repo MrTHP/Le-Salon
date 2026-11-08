@@ -3,7 +3,7 @@
 
 use std::{
     io::{BufRead, BufReader, Read, Write},
-    net::{TcpListener, TcpStream},
+    net::{Ipv4Addr, TcpListener, TcpStream},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -15,7 +15,7 @@ use ircv3_core::{
 };
 
 #[test]
-fn plain_tcp_cap_sasl_join_and_message() {
+fn plain_tcp_cap_join_and_message() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let received = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -35,8 +35,8 @@ fn plain_tcp_cap_sasl_join_and_message() {
         nick: "tester".into(),
         user: "tester".into(),
         realname: "Testeur".into(),
-        sasl_account: Some("tester".into()),
-        sasl_password: Some("secret".into()),
+        sasl_account: None,
+        sasl_password: None,
         channels: vec!["#test".into()],
         auto_reconnect: false,
     };
@@ -89,17 +89,6 @@ fn plain_tcp_cap_sasl_join_and_message() {
 
     let lines = received.lock().unwrap().clone();
     assert!(lines.iter().any(|line| line == "CAP LS 302"));
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.starts_with("CAP REQ :") && line.contains("sasl"))
-    );
-    assert!(lines.iter().any(|line| line == "AUTHENTICATE PLAIN"));
-    assert!(
-        lines.iter().any(
-            |line| line.starts_with("AUTHENTICATE ") && line.len() > "AUTHENTICATE PLAIN".len()
-        )
-    );
     assert!(lines.iter().any(|line| line == "JOIN #test"));
     assert!(
         lines
@@ -134,10 +123,11 @@ fn plain_tcp_cap_sasl_join_and_message() {
         .unwrap();
     let ctcp = offer.split(" :").nth(1).unwrap().trim_matches('\u{01}');
     let parts: Vec<&str> = ctcp.split_whitespace().collect();
+    let ip: u32 = parts[3].parse().unwrap();
     let port: u16 = parts[4].parse().unwrap();
     let size: u64 = parts[5].parse().unwrap();
     assert_eq!(size, payload.len() as u64);
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    let mut stream = TcpStream::connect((Ipv4Addr::from(ip), port)).unwrap();
     let mut received_file = Vec::new();
     stream.read_to_end(&mut received_file).unwrap();
     assert_eq!(received_file, payload);
@@ -150,6 +140,50 @@ fn plain_tcp_cap_sasl_join_and_message() {
     });
     let _ = std::fs::remove_dir_all(dir);
 
+    handle.disconnect();
+}
+
+#[test]
+fn sasl_without_tls_is_refused_before_connecting() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    let connection = ConnectionConfig {
+        host: "127.0.0.1".into(),
+        port,
+        tls: false,
+        verify_tls: true,
+        nick: "tester".into(),
+        user: "tester".into(),
+        realname: "Testeur".into(),
+        sasl_account: Some("tester".into()),
+        sasl_password: Some("secret".into()),
+        channels: Vec::new(),
+        auto_reconnect: false,
+    };
+    let model = Arc::new(Mutex::new(AppModel::new(Config::default())));
+    let (wake_tx, _wake_rx) = async_channel::bounded(1);
+    let network_id = model.lock().unwrap().add_network(connection.clone());
+    let handle = client::spawn(network_id, connection, model.clone(), wake_tx);
+
+    wait_until(Duration::from_secs(2), || {
+        model
+            .lock()
+            .unwrap()
+            .network(network_id)
+            .is_some_and(|network| network.status == ConnectionStatus::Disconnected)
+    });
+
+    let model = model.lock().unwrap();
+    let network = model.network(network_id).unwrap();
+    assert_eq!(network.status, ConnectionStatus::Disconnected);
+    assert!(network.status_text.contains("SASL"));
+    assert!(network.status_text.contains("TLS"));
+    drop(model);
+
+    // Aucune connexion TCP ne doit avoir été tentée.
+    assert!(listener.accept().is_err());
     handle.disconnect();
 }
 

@@ -33,6 +33,9 @@ pub struct ConnectForm {
     tls: bool,
     verify: bool,
     remember_password: bool,
+    saved_host: String,
+    saved_account: String,
+    password_cleared: bool,
     allow_cancel: bool,
     error: Option<SharedString>,
     focus_handle: FocusHandle,
@@ -103,6 +106,9 @@ impl ConnectForm {
             tls: config.tls,
             verify: config.verify_tls,
             remember_password: config.remember_sasl_password,
+            saved_host: config.server.trim().to_string(),
+            saved_account: config.sasl_account.trim().to_string(),
+            password_cleared: !config.remember_sasl_password || config.sasl_password.is_empty(),
             allow_cancel,
             error: None,
             focus_handle: cx.focus_handle(),
@@ -136,12 +142,29 @@ impl ConnectForm {
                 }
             }
             TextInputEvent::Changed(_) => {
+                self.clear_password_if_identity_changed(cx);
                 if self.error.is_some() {
                     self.error = None;
                     cx.notify();
                 }
             }
             TextInputEvent::Tab => {}
+        }
+    }
+
+    /// Un mot de passe mémorisé n'est valable que pour un couple
+    /// (hôte, compte). Dès que l'un change, on efface le champ pour éviter
+    /// d'envoyer le secret d'un réseau à un autre.
+    fn clear_password_if_identity_changed(&mut self, cx: &mut Context<Self>) {
+        if self.password_cleared {
+            return;
+        }
+        let host = self.server.read(cx).content().trim().to_string();
+        let account = self.sasl_account.read(cx).content().trim().to_string();
+        if host != self.saved_host || account != self.saved_account {
+            self.sasl_password.update(cx, |input, cx| input.clear(cx));
+            self.password_cleared = true;
+            cx.notify();
         }
     }
 
@@ -157,6 +180,27 @@ impl ConnectForm {
         if server.is_empty() {
             self.set_error(
                 i18n::t("Indiquez un serveur IRC.", "Enter an IRC server."),
+                cx,
+            );
+            return;
+        }
+        let scheme = server.to_ascii_lowercase();
+        if scheme.starts_with("irc://") && self.tls {
+            self.set_error(
+                i18n::t(
+                    "irc:// implique une connexion en clair : décochez TLS ou utilisez ircs://.",
+                    "irc:// implies a clear-text connection: uncheck TLS or use ircs://.",
+                ),
+                cx,
+            );
+            return;
+        }
+        if scheme.starts_with("ircs://") && !self.tls {
+            self.set_error(
+                i18n::t(
+                    "ircs:// exige TLS : cochez « Connexion TLS ».",
+                    "ircs:// requires TLS: check “TLS connection”.",
+                ),
                 cx,
             );
             return;
@@ -204,6 +248,10 @@ impl ConnectForm {
             auto_reconnect: true,
         }
         .normalized();
+        if let Err(error) = connection.security_check() {
+            self.set_error(error, cx);
+            return;
+        }
         cx.emit(ConnectFormEvent::Submit {
             connection,
             remember_password: self.remember_password,
@@ -217,6 +265,11 @@ impl ConnectForm {
 
     fn toggle_tls(&mut self, _: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.tls = !self.tls;
+        if self.tls {
+            // Activer TLS réactive la vérification : on ne veut pas d'un TLS
+            // « décoratif » qui accepterait n'importe quel certificat.
+            self.verify = true;
+        }
         let port = self.port.read(cx).content().to_string();
         if self.tls && port == "6667" {
             self.port.update(cx, |input, cx| input.set_text("6697", cx));
@@ -468,10 +521,44 @@ impl Render for ConnectForm {
                         .text_size(px(9.5))
                         .text_color(theme::faint())
                         .child(i18n::t(
-                            "Le mot de passe mémorisé est confié au trousseau système. Sans trousseau disponible, il est stocké en clair dans ~/.config/le-salon (0600).",
-                            "A remembered password is kept in the system keyring. Without one, it is stored in plain text in ~/.config/le-salon (0600).",
+                            "Le mot de passe mémorisé est confié au trousseau système, par réseau. Sans trousseau disponible, il est stocké en clair dans ~/.config/le-salon (0600).",
+                            "A remembered password is kept in the system keyring, per network. Without one, it is stored in plain text in ~/.config/le-salon (0600).",
                         )),
-                );
+                )
+                .when(!self.tls, |this| {
+                    this.child(
+                        div()
+                            .rounded_md()
+                            .bg(theme::error_alpha(0.09))
+                            .border_1()
+                            .border_color(theme::error_alpha(0.33))
+                            .px_3()
+                            .py_2()
+                            .text_size(px(11.5))
+                            .text_color(theme::red())
+                            .child(i18n::t(
+                                "⚠ Connexion non chiffrée : SASL est bloqué et tes messages sont lisibles par le réseau. Active TLS si possible.",
+                                "⚠ Unencrypted connection: SASL is blocked and your messages are readable by the network. Enable TLS if possible.",
+                            )),
+                    )
+                })
+                .when(self.tls && !self.verify, |this| {
+                    this.child(
+                        div()
+                            .rounded_md()
+                            .bg(theme::error_alpha(0.09))
+                            .border_1()
+                            .border_color(theme::error_alpha(0.33))
+                            .px_3()
+                            .py_2()
+                            .text_size(px(11.5))
+                            .text_color(theme::red())
+                            .child(i18n::t(
+                                "⚠ Vérification du certificat désactivée : un MITM peut intercepter la connexion et voler le mot de passe. Ne l'utilise que pour un serveur local de confiance.",
+                                "⚠ Certificate verification disabled: a MITM can intercept the connection and steal the password. Only use this for a trusted local server.",
+                            )),
+                    )
+                });
 
         if let Some(error) = &self.error {
             card = card.child(
