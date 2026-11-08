@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Le Salon
+Comment=Le Salon — client IRCv3 moderne en Rust (GPUI, TLS, SASL)
+Exec=le-salon
+Icon=le-salon
+Type=Application
+Categories=Network;IRCClient;
+Terminal=false
+StartupNotify=false
+X-AppImage-Version=1.6.0

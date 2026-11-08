@@ -1,0 +1,41 @@
+#!/bin/sh
+# AppRun — lanceur AppImage pour Le Salon.
+# Priorité aux bibliothèques embarquées, sans casser les chemins système
+# (polices, certificats, pilotes Vulkan, Wayland/X11).
+HERE="$(dirname "$(readlink -f "$0")")"
+
+export LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export XDG_DATA_DIRS="$HERE/usr/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+
+# GPUI utilise Wayland si WAYLAND_DISPLAY est défini, sinon X11.
+# Sur certaines configurations Wayland, forcer XWayland peut dépanner :
+#   LE_SALON_X11=1 ./Le-Salon-*.AppImage
+if [ "${LE_SALON_X11:-0}" = "1" ]; then
+  unset WAYLAND_DISPLAY
+fi
+
+# --version/--help ne nécessitent aucun serveur graphique.
+case "${1:-}" in
+  --version|-V|--help|-h)
+    exec "$HERE/usr/bin/le-salon" "$@"
+    ;;
+esac
+
+if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  echo "le-salon : aucun serveur graphique détecté (DISPLAY et WAYLAND_DISPLAY vides)." >&2
+  exit 1
+fi
+
+# Wayland peut échouer selon le compositeur ; on retente sous XWayland si
+# un serveur X est disponible. Un quit normal (code 0) n'est pas réessayé.
+if [ -n "${WAYLAND_DISPLAY:-}" ] && [ -n "${DISPLAY:-}" ] && [ "${LE_SALON_X11:-0}" != "1" ]; then
+  "$HERE/usr/bin/le-salon" "$@"
+  status=$?
+  if [ "$status" -eq 0 ]; then
+    exit 0
+  fi
+  echo "le-salon : Wayland a échoué (code $status), nouvelle tentative sous X11…" >&2
+  unset WAYLAND_DISPLAY
+fi
+
+exec "$HERE/usr/bin/le-salon" "$@"

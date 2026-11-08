@@ -1,0 +1,6 @@
+/target
+/AppDir
+/dist
+/Le-Salon-*
+.DS_Store
+*.log

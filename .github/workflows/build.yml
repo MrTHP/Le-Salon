@@ -1,0 +1,56 @@
+name: Build Le Salon
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: System dependencies (GPUI, X11, xkbcommon, fonts)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential pkg-config curl squashfs-tools \
+            libxkbcommon-dev libxkbcommon-x11-dev \
+            libxcb1-dev libxcb-xkb-dev libx11-dev \
+            libwayland-dev libfontconfig1-dev libfreetype-dev \
+            libvulkan-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: .
+      - name: Tests
+        run: cargo test --workspace
+      - name: AppImage
+        run: sh tools/build-appimage-le-salon.sh
+      - name: Upload Linux AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: le-salon-linux
+          path: Le-Salon-*.AppImage
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: .
+      - name: Tests
+        run: cargo test --workspace
+      - name: Universal macOS app
+        run: sh tools/build-macos-app.sh
+      - name: Upload macOS app
+        uses: actions/upload-artifact@v4
+        with:
+          name: le-salon-macos
+          path: Le-Salon-*-macos-universal.zip
+          if-no-files-found: error
