@@ -9,7 +9,7 @@
 [![Version](https://img.shields.io/badge/version-1.7.0-informational)](Cargo.toml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#licence)
 
-**🇫🇷 [Français](#français) · 🇬🇧 [English](#english)**
+**🇫🇷 [Français](#français) · 🇬🇧 [English](#english) · 🌐 [Site web](https://mrthp.github.io/Le-Salon/)**
 
 Le Salon est un client IRC moderne, natif et rapide : protocole IRCv3,
 TLS, SASL, DCC, messages planifiés, emojis, thèmes, notifications et une

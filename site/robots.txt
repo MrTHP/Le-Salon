@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://mrthp.github.io/Le-Salon/sitemap.xml
