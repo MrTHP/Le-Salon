@@ -35,6 +35,8 @@ pub struct Config {
     pub remember_sasl_password: bool,
     pub channels: String,
     pub auto_reconnect: bool,
+    /// Proxy SOCKS5 optionnel (vide = connexion directe).
+    pub proxy: String,
     pub connect_on_start: bool,
     /// "auto", "fr" ou "en".
     pub language: String,
@@ -79,6 +81,7 @@ impl Default for Config {
             remember_sasl_password: true,
             channels: String::new(),
             auto_reconnect: true,
+            proxy: String::new(),
             connect_on_start: false,
             language: "auto".into(),
             theme: "nuit".into(),
@@ -121,6 +124,16 @@ impl fmt::Debug for Config {
             .field("remember_sasl_password", &self.remember_sasl_password)
             .field("channels", &self.channels)
             .field("auto_reconnect", &self.auto_reconnect)
+            .field(
+                "proxy",
+                &if self.proxy.is_empty() {
+                    "<direct>"
+                } else if self.proxy.contains('@') {
+                    "<proxy with credentials>"
+                } else {
+                    self.proxy.as_str()
+                },
+            )
             .field("connect_on_start", &self.connect_on_start)
             .field("language", &self.language)
             .field("theme", &self.theme)
@@ -365,6 +378,7 @@ impl Config {
             sasl_password: sasl_password.filter(|password| !password.is_empty()),
             channels: self.parsed_channels(),
             auto_reconnect: self.auto_reconnect,
+            proxy: (!self.proxy.trim().is_empty()).then(|| self.proxy.trim().to_string()),
         }
     }
 
@@ -385,6 +399,7 @@ impl Config {
         self.sasl_account = connection.sasl_account.clone().unwrap_or_default();
         self.channels = connection.channels.join(",");
         self.auto_reconnect = connection.auto_reconnect;
+        self.proxy = connection.proxy.clone().unwrap_or_default();
     }
 }
 
@@ -401,6 +416,8 @@ pub struct ConnectionConfig {
     pub sasl_password: Option<String>,
     pub channels: Vec<String>,
     pub auto_reconnect: bool,
+    /// Proxy SOCKS5 optionnel (`hôte:port` ou `socks5://user:pass@hôte:port`).
+    pub proxy: Option<String>,
 }
 
 impl fmt::Debug for ConnectionConfig {
@@ -424,6 +441,16 @@ impl fmt::Debug for ConnectionConfig {
             )
             .field("channels", &self.channels)
             .field("auto_reconnect", &self.auto_reconnect)
+            .field(
+                "proxy",
+                &self.proxy.as_ref().map(|proxy| {
+                    if proxy.contains('@') {
+                        "<proxy with credentials>"
+                    } else {
+                        proxy.as_str()
+                    }
+                }),
+            )
             .finish()
     }
 }
@@ -550,6 +577,7 @@ mod tests {
             sasl_password: None,
             channels: vec!["test".into()],
             auto_reconnect: true,
+            proxy: None,
         }
         .normalized();
         assert_eq!(connection.host, "irc.example.org");
@@ -573,6 +601,7 @@ mod tests {
             sasl_password: sasl_account.map(|_| "secret".to_string()),
             channels: Vec::new(),
             auto_reconnect: true,
+            proxy: None,
         }
     }
 

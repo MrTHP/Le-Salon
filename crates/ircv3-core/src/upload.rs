@@ -41,7 +41,12 @@ pub fn upload_file(path: &Path) -> Result<String, String> {
         }
     })?;
     let bytes = sanitize_image(bytes)?;
-    let part = reqwest::blocking::multipart::Part::bytes(bytes).file_name(filename.clone());
+    upload_bytes(bytes, filename)
+}
+
+/// Téléverse des octets déjà préparés (partage de texte, extraits…).
+pub fn upload_bytes(bytes: Vec<u8>, filename: String) -> Result<String, String> {
+    let part = reqwest::blocking::multipart::Part::bytes(bytes).file_name(filename);
     let form = reqwest::blocking::multipart::Form::new()
         .text("reqtype", "fileupload")
         .text("time", "72h")

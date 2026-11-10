@@ -17,7 +17,7 @@ use gpui::{
 };
 
 use ircv3_core::{
-    APP_NAME, Config, ConnectionConfig, HistoryStore, Lang,
+    APP_NAME, Config, ConnectionConfig, EncryptionStore, HistoryStore, Lang,
     client::{self, NetworkHandle},
     formatting, irc_fold, media,
     model::{
@@ -207,6 +207,14 @@ struct ReplyTarget {
 }
 
 #[derive(Clone, Debug)]
+struct PendingModeration {
+    network_id: NetworkId,
+    target: String,
+    nick: String,
+    commands: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
 enum PaletteAction {
     Input(&'static str),
     Buffer(BufferId),
@@ -308,6 +316,7 @@ pub struct AppRoot {
     saved_note_input: Entity<TextInput>,
     saved_label_input: Entity<TextInput>,
     reaction_target: Option<(BufferId, String)>,
+    moderation: Option<PendingModeration>,
 }
 
 impl AppRoot {
@@ -320,6 +329,7 @@ impl AppRoot {
         let lang = Lang::from_config(&config.language);
         i18n::set_lang(lang);
         let theme_key = std::env::var("LE_SALON_THEME").unwrap_or_else(|_| config.theme.clone());
+        theme::load_custom_theme();
         let theme_index = theme::set_theme_key(&theme_key);
         config.theme = theme::themes()[theme_index].key.to_string();
         let model = Arc::new(Mutex::new(AppModel::new(config.clone())));
@@ -327,6 +337,10 @@ impl AppRoot {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .enable_history(HistoryStore::default());
+        model
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .enable_encryption(EncryptionStore::default());
         let (wake_tx, wake_rx) = async_channel::bounded(1);
         let input = cx.new(|cx| {
             TextInput::new(
@@ -530,6 +544,7 @@ impl AppRoot {
             saved_note_input,
             saved_label_input,
             reaction_target: None,
+            moderation: None,
         };
         root.start_tasks(cx);
         // Commutateurs de diagnostic pour les captures d'écran.
@@ -2726,38 +2741,73 @@ impl AppRoot {
             );
             if let Some(link) = media::find_media(&line.text) {
                 let url = link.url.clone();
-                let label = match link.kind {
-                    media::MediaKind::Audio => i18n::t("Écouter", "Listen"),
-                    media::MediaKind::Image => i18n::t("Voir l'image", "View image"),
-                    _ => i18n::t("Ouvrir la vidéo", "Open video"),
-                };
-                children.push(
-                    div()
-                        .pl(px(75.))
-                        .py_1()
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .px_2()
-                                .py_1()
-                                .rounded_sm()
-                                .bg(theme::panel_alt())
-                                .border_1()
-                                .border_color(theme::border())
-                                .text_size(px(10.5))
-                                .text_color(theme::accent())
-                                .cursor_pointer()
-                                .hover(|style| style.bg(theme::accent_dark()))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(move |_, _, _, cx| cx.open_url(&url)),
-                                )
-                                .child(format!("{} {} · {}", link.kind.icon(), label, link.host)),
-                        )
-                        .into_any_element(),
-                );
+                if let Some(thumbnail) = link.thumbnail_url() {
+                    children.push(
+                        div()
+                            .pl(px(75.))
+                            .py_1()
+                            .child(
+                                div()
+                                    .w(px(340.))
+                                    .max_h(px(240.))
+                                    .overflow_hidden()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(theme::border())
+                                    .bg(theme::panel_alt())
+                                    .cursor_pointer()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |_, _, _, cx| cx.open_url(&url)),
+                                    )
+                                    .child(
+                                        gpui::img(thumbnail)
+                                            .w_full()
+                                            .max_h(px(240.))
+                                            .object_fit(gpui::ObjectFit::Contain),
+                                    ),
+                            )
+                            .into_any_element(),
+                    );
+                } else {
+                    let label = match link.kind {
+                        media::MediaKind::Audio => i18n::t("Écouter", "Listen"),
+                        media::MediaKind::Image => i18n::t("Voir l'image", "View image"),
+                        _ => i18n::t("Ouvrir la vidéo", "Open video"),
+                    };
+                    children.push(
+                        div()
+                            .pl(px(75.))
+                            .py_1()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_sm()
+                                    .bg(theme::panel_alt())
+                                    .border_1()
+                                    .border_color(theme::border())
+                                    .text_size(px(10.5))
+                                    .text_color(theme::accent())
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::accent_dark()))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |_, _, _, cx| cx.open_url(&url)),
+                                    )
+                                    .child(format!(
+                                        "{} {} · {}",
+                                        link.kind.icon(),
+                                        label,
+                                        link.host
+                                    )),
+                            )
+                            .into_any_element(),
+                    );
+                }
             }
         }
         if let Some(index) = pending_child {
@@ -3647,6 +3697,17 @@ impl AppRoot {
             MenuAction::SaveMessage(buffer_id, line.clone()),
         ));
         items.push(MenuItem::new(
+            i18n::t("Partager le message (72 h)", "Share message (72 h)"),
+            MenuAction::ShareMessage(buffer_id, line.clone()),
+        ));
+        items.push(MenuItem::new(
+            i18n::t(
+                "Partager les 20 derniers messages",
+                "Share last 20 messages",
+            ),
+            MenuAction::ShareExcerpt(buffer_id),
+        ));
+        items.push(MenuItem::new(
             i18n::t("Copier le texte", "Copy text"),
             MenuAction::Copy(line.text.clone()),
         ));
@@ -3720,6 +3781,48 @@ impl AppRoot {
         cx.notify();
     }
 
+    fn open_moderation_preview(
+        &mut self,
+        nick: String,
+        kick: bool,
+        ban: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((network_id, _, kind, channel)) = self.active_context() else {
+            self.set_status(i18n::t("Aucun salon actif.", "No active channel."), cx);
+            return;
+        };
+        if kind != BufferKind::Channel {
+            self.set_status(
+                i18n::t(
+                    "La modération guidée nécessite un salon.",
+                    "Guided moderation requires a channel.",
+                ),
+                cx,
+            );
+            return;
+        }
+        let mut commands = Vec::new();
+        if ban {
+            commands.push(format!("MODE {channel} +b {nick}!*@*"));
+        }
+        if kick {
+            commands.push(format!(
+                "KICK {channel} {nick} :{}",
+                i18n::t("modération", "moderation")
+            ));
+        }
+        self.moderation = Some(PendingModeration {
+            network_id,
+            target: channel,
+            nick,
+            commands,
+        });
+        self.should_focus_input = false;
+        self.popup = None;
+        cx.notify();
+    }
+
     fn set_language(&mut self, lang: Lang, cx: &mut Context<Self>) {
         i18n::set_lang(lang);
         self.config.language = lang.code().to_string();
@@ -3761,6 +3864,103 @@ impl AppRoot {
         self.theme_picker_open = false;
         self.popup = None;
         cx.notify();
+    }
+
+    fn export_theme(&mut self, cx: &mut Context<Self>) {
+        let directory = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let receiver = cx.prompt_for_new_path(&directory, Some("le-salon-theme.json"));
+        cx.spawn(async move |this, cx| match receiver.await {
+            Ok(Ok(Some(path))) => {
+                let result = std::fs::write(&path, theme::export_current_json());
+                let _ = this.update(cx, |this, cx| match result {
+                    Ok(()) => this.set_status(
+                        format!(
+                            "{} {}",
+                            i18n::t("Thème exporté :", "Theme exported:"),
+                            path.display()
+                        ),
+                        cx,
+                    ),
+                    Err(error) => this.set_status(
+                        format!(
+                            "{} {error}",
+                            i18n::t("Export impossible :", "Export failed:")
+                        ),
+                        cx,
+                    ),
+                });
+            }
+            Ok(Err(error)) => {
+                let _ = this.update(cx, |this, cx| {
+                    this.set_status(
+                        format!(
+                            "{} {error}",
+                            i18n::t(
+                                "Sélecteur de fichiers indisponible :",
+                                "File picker unavailable:"
+                            )
+                        ),
+                        cx,
+                    )
+                });
+            }
+            _ => {}
+        })
+        .detach();
+    }
+
+    fn import_theme(&mut self, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(i18n::t("Choisir un thème JSON", "Choose a JSON theme").into()),
+        });
+        cx.spawn(async move |this, cx| match receiver.await {
+            Ok(Ok(Some(paths))) => {
+                if let Some(path) = paths.into_iter().next() {
+                    let text = std::fs::read_to_string(&path);
+                    let _ = this.update(cx, |this, cx| match text {
+                        Ok(text) => match theme::import_json(&text) {
+                            Ok(index) => {
+                                this.apply_theme(index, cx);
+                                this.set_status(i18n::t("Thème importé.", "Theme imported."), cx);
+                            }
+                            Err(error) => this.set_status(
+                                format!(
+                                    "{} {error}",
+                                    i18n::t("Import impossible :", "Import failed:")
+                                ),
+                                cx,
+                            ),
+                        },
+                        Err(error) => this.set_status(
+                            format!(
+                                "{} {error}",
+                                i18n::t("Lecture impossible :", "Read failed:")
+                            ),
+                            cx,
+                        ),
+                    });
+                }
+            }
+            Ok(Err(error)) => {
+                let _ = this.update(cx, |this, cx| {
+                    this.set_status(
+                        format!(
+                            "{} {error}",
+                            i18n::t(
+                                "Sélecteur de fichiers indisponible :",
+                                "File picker unavailable:"
+                            )
+                        ),
+                        cx,
+                    )
+                });
+            }
+            _ => {}
+        })
+        .detach();
     }
 
     fn open_popup(
@@ -3978,6 +4178,14 @@ impl AppRoot {
             }
             TopMenu::View => vec![
                 MenuItem::new(i18n::t("Thèmes…", "Themes…"), MenuAction::Themes),
+                MenuItem::new(
+                    i18n::t("Exporter le thème…", "Export theme…"),
+                    MenuAction::ExportTheme,
+                ),
+                MenuItem::new(
+                    i18n::t("Importer un thème…", "Import theme…"),
+                    MenuAction::ImportTheme,
+                ),
                 MenuItem::new(i18n::t("Emojis…", "Emojis…"), MenuAction::Emoji),
                 MenuItem::new(i18n::t("Appel Jitsi", "Jitsi call"), MenuAction::Jitsi),
                 MenuItem::new(
@@ -4050,13 +4258,24 @@ impl AppRoot {
             ));
             items.push(
                 MenuItem::new(
-                    i18n::t("Expulser du salon", "Kick from channel"),
+                    i18n::t("Expulser (aperçu)…", "Kick (preview)…"),
                     MenuAction::Kick(nick.clone()),
                 )
                 .danger(),
             );
             items.push(
-                MenuItem::new(i18n::t("Bannir", "Ban"), MenuAction::Ban(nick.clone())).danger(),
+                MenuItem::new(
+                    i18n::t("Bannir (aperçu)…", "Ban (preview)…"),
+                    MenuAction::Ban(nick.clone()),
+                )
+                .danger(),
+            );
+            items.push(
+                MenuItem::new(
+                    i18n::t("Bannir et expulser…", "Ban and kick…"),
+                    MenuAction::BanKick(nick.clone()),
+                )
+                .danger(),
             );
             items.push(MenuItem::new(
                 i18n::t("Inviter dans le salon", "Invite to channel"),
@@ -4380,12 +4599,15 @@ impl AppRoot {
             MenuAction::Deop(nick) => self.send_command(format!("/deop {nick}"), cx),
             MenuAction::Voice(nick) => self.send_command(format!("/voice {nick}"), cx),
             MenuAction::Devoice(nick) => self.send_command(format!("/devoice {nick}"), cx),
-            MenuAction::Kick(nick) => self.send_command(format!("/kick {nick}"), cx),
-            MenuAction::Ban(nick) => self.send_command(format!("/ban {nick}!*@*"), cx),
+            MenuAction::Kick(nick) => self.open_moderation_preview(nick, true, false, cx),
+            MenuAction::Ban(nick) => self.open_moderation_preview(nick, false, true, cx),
+            MenuAction::BanKick(nick) => self.open_moderation_preview(nick, true, true, cx),
             MenuAction::Invite(nick) => self.send_command(format!("/invite {nick}"), cx),
             MenuAction::ReplyMessage(line) => self.start_reply(&line, cx),
             MenuAction::ReactMessage(buffer_id, line) => self.start_reaction(buffer_id, &line, cx),
             MenuAction::SaveMessage(buffer_id, line) => self.save_message(buffer_id, &line, cx),
+            MenuAction::ShareMessage(buffer_id, line) => self.share_message(buffer_id, &line, cx),
+            MenuAction::ShareExcerpt(buffer_id) => self.share_excerpt(buffer_id, 20, cx),
             MenuAction::SearchMessages => self.open_search(cx),
             MenuAction::SavedMessages => {
                 self.saved_open = true;
@@ -4443,6 +4665,8 @@ impl AppRoot {
                 }
                 cx.notify();
             }
+            MenuAction::ExportTheme => self.export_theme(cx),
+            MenuAction::ImportTheme => self.import_theme(cx),
         }
     }
 
@@ -4646,6 +4870,102 @@ impl AppRoot {
         });
     }
 
+    fn share_text(&mut self, text: String, filename: String, cx: &mut Context<Self>) {
+        let Some((network_id, _, kind, target)) = self.active_context() else {
+            self.set_status(i18n::t("Aucun salon actif.", "No active channel."), cx);
+            return;
+        };
+        if kind == BufferKind::Server {
+            self.set_status(
+                i18n::t(
+                    "Ouvrez un salon ou un privé pour partager.",
+                    "Open a channel or query to share.",
+                ),
+                cx,
+            );
+            return;
+        }
+        let Some(handle) = self.networks.get(&network_id) else {
+            self.set_status(i18n::t("Réseau indisponible.", "Network unavailable."), cx);
+            return;
+        };
+        let sender = handle.line_sender();
+        let french = i18n::is_fr();
+        self.set_status(
+            format!("⏳ {} {filename}…", i18n::t("Création de", "Creating")),
+            cx,
+        );
+        std::thread::spawn(move || {
+            match upload::upload_bytes(text.into_bytes(), filename.clone()) {
+                Ok(url) => {
+                    sender.send_message(target, url.clone());
+                    sender.send_local(
+                        LineKind::Info,
+                        if french {
+                            format!("⇧ {filename} partagé : {url}")
+                        } else {
+                            format!("⇧ {filename} shared: {url}")
+                        },
+                    );
+                }
+                Err(error) => {
+                    sender.send_local(
+                        LineKind::Error,
+                        if french {
+                            format!("Échec du partage de {filename} : {error}")
+                        } else {
+                            format!("Sharing {filename} failed: {error}")
+                        },
+                    );
+                }
+            }
+        });
+    }
+
+    fn share_message(&mut self, _buffer_id: BufferId, line: &ChatLine, cx: &mut Context<Self>) {
+        let text = format!(
+            "Le Salon — {}\n[{}] <{}> {}\n",
+            i18n::t("message partagé", "shared message"),
+            line.at.format("%Y-%m-%d %H:%M:%S"),
+            line.nick.as_deref().unwrap_or("?"),
+            line.text
+        );
+        self.share_text(
+            text,
+            format!("le-salon-message-{}.txt", Local::now().timestamp()),
+            cx,
+        );
+    }
+
+    fn share_excerpt(&mut self, buffer_id: BufferId, count: usize, cx: &mut Context<Self>) {
+        let (name, lines) = {
+            let model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(buffer) = model.buffer(buffer_id) else {
+                return;
+            };
+            let start = buffer.messages.len().saturating_sub(count);
+            let mut lines = String::new();
+            for line in buffer.messages.iter().skip(start) {
+                lines.push_str(&format!(
+                    "[{}] <{}> {}\n",
+                    line.at.format("%Y-%m-%d %H:%M:%S"),
+                    line.nick.as_deref().unwrap_or("?"),
+                    line.text
+                ));
+            }
+            (buffer.name.clone(), lines)
+        };
+        let text = format!(
+            "Le Salon — {} {name}\n\n{lines}",
+            i18n::t("extrait de conversation", "conversation excerpt")
+        );
+        self.share_text(
+            text,
+            format!("le-salon-excerpt-{}.txt", Local::now().timestamp()),
+            cx,
+        );
+    }
+
     fn open_dcc_picker(&mut self, nick: String, cx: &mut Context<Self>) {
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: true,
@@ -4836,6 +5156,23 @@ impl AppRoot {
                 ),
             );
             let _ = cx;
+        }
+    }
+
+    fn reconnect_with_proxy(&mut self, cx: &mut Context<Self>) {
+        let Some((network_id, _, _, _)) = self.active_context() else {
+            return;
+        };
+        let connection = self.config.connection(None).normalized();
+        if let Some(handle) = self.networks.get(&network_id) {
+            handle.reconnect_with(connection);
+            self.set_status(
+                i18n::t(
+                    "Reconnexion avec le nouveau proxy…",
+                    "Reconnecting with the new proxy…",
+                ),
+                cx,
+            );
         }
     }
 
@@ -5048,6 +5385,133 @@ impl AppRoot {
     fn expire_toasts(&mut self) {
         let now = Instant::now();
         self.toasts.retain(|toast| toast.expires_at > now);
+    }
+
+    fn render_moderation_dialog(&mut self, cx: &mut Context<Self>) -> Div {
+        let Some(pending) = self.moderation.clone() else {
+            return div();
+        };
+        let commands = pending.commands.join("\n");
+        let send = pending.clone();
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgba(0x000000a8))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.moderation = None;
+                    this.should_focus_input = true;
+                    cx.notify();
+                }),
+            )
+            .child(
+                div()
+                    .w(px(560.))
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .p_5()
+                    .rounded_lg()
+                    .bg(theme::panel())
+                    .border_1()
+                    .border_color(theme::border())
+                    .shadow_lg()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .text_xl()
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .child(i18n::t("Modération guidée", "Guided moderation")),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.5))
+                            .text_color(theme::muted())
+                            .child(format!(
+                                "{} {} · {}",
+                                if pending.commands.len() > 1 {
+                                    i18n::t("Actions pour", "Actions for")
+                                } else {
+                                    i18n::t("Action pour", "Action for")
+                                },
+                                pending.nick,
+                                pending.target
+                            )),
+                    )
+                    .child(
+                        div()
+                            .p_3()
+                            .rounded_md()
+                            .bg(theme::input_bg())
+                            .border_1()
+                            .border_color(theme::border())
+                            .text_size(px(11.5))
+                            .font_family(theme::MONO_FONT)
+                            .text_color(theme::text())
+                            .child(commands),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .px_3()
+                                    .py_2()
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::panel_alt()))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.moderation = None;
+                                            this.should_focus_input = true;
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(i18n::t("Annuler", "Cancel")),
+                            )
+                            .child(
+                                div()
+                                    .px_4()
+                                    .py_2()
+                                    .rounded_md()
+                                    .bg(theme::accent())
+                                    .text_color(theme::on_accent())
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::accent_hover()))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, _, cx| {
+                                            if let Some(handle) =
+                                                this.networks.get(&send.network_id)
+                                            {
+                                                for command in &send.commands {
+                                                    handle.send_input(command.clone());
+                                                }
+                                            }
+                                            this.moderation = None;
+                                            this.should_focus_input = true;
+                                            this.set_status(
+                                                i18n::t(
+                                                    "Commandes de modération envoyées.",
+                                                    "Moderation commands sent.",
+                                                ),
+                                                cx,
+                                            );
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(i18n::t("Envoyer ces commandes", "Send these commands")),
+                            ),
+                    ),
+            )
     }
 
     fn render_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
@@ -5872,6 +6336,199 @@ impl AppRoot {
 
     fn handle_special_command(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
         let trimmed = text.trim();
+        if let Some(rest) = trimmed.strip_prefix("/encrypt ") {
+            let mut parts = rest.split_whitespace();
+            let command = parts.next().unwrap_or("");
+            let active_target = self
+                .active_context()
+                .filter(|(_, _, kind, _)| *kind != BufferKind::Server)
+                .map(|(_, _, _, name)| name);
+            match command {
+                "generate" => {
+                    let target = parts.next().map(str::to_string).or(active_target);
+                    let Some(target) = target else {
+                        self.set_status(
+                            i18n::t("Aucune cible pour /encrypt.", "No target for /encrypt."),
+                            cx,
+                        );
+                        return true;
+                    };
+                    let key = {
+                        let mut model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+                        model
+                            .encryption
+                            .as_mut()
+                            .map(|encryption| encryption.generate_key(&target))
+                    };
+                    if let Some(key) = key {
+                        cx.write_to_clipboard(ClipboardItem::new_string(key));
+                        self.set_status(
+                            format!(
+                                "{} {target} — {}",
+                                i18n::t("Clé générée pour", "Key generated for"),
+                                i18n::t("copiée dans le presse-papiers", "copied to clipboard")
+                            ),
+                            cx,
+                        );
+                    }
+                }
+                "set" => {
+                    let target = parts.next().map(str::to_string).or(active_target);
+                    let passphrase = parts.collect::<Vec<_>>().join(" ");
+                    let Some(target) = target else {
+                        self.set_status(i18n::t("Cible manquante.", "Target missing."), cx);
+                        return true;
+                    };
+                    if passphrase.is_empty() {
+                        self.set_status(
+                            i18n::t(
+                                "Usage : /encrypt set cible phrase-secrète",
+                                "Usage: /encrypt set target passphrase",
+                            ),
+                            cx,
+                        );
+                        return true;
+                    }
+                    let result = {
+                        let mut model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+                        model
+                            .encryption
+                            .as_mut()
+                            .ok_or_else(|| "chiffrement indisponible".to_string())
+                            .and_then(|encryption| encryption.set_passphrase(&target, &passphrase))
+                    };
+                    match result {
+                        Ok(_) => self.set_status(
+                            format!(
+                                "{} {target}",
+                                i18n::t("Clé dérivée pour", "Key derived for")
+                            ),
+                            cx,
+                        ),
+                        Err(error) => self.set_status(error, cx),
+                    }
+                }
+                "set-key" => {
+                    let target = parts.next().map(str::to_string).or(active_target);
+                    let key = parts.next().unwrap_or("");
+                    if let Some(target) = target {
+                        let result = {
+                            let mut model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+                            model
+                                .encryption
+                                .as_mut()
+                                .ok_or_else(|| "chiffrement indisponible".to_string())
+                                .and_then(|encryption| encryption.set_base64(&target, key))
+                        };
+                        match result {
+                            Ok(()) => self.set_status(
+                                format!(
+                                    "{} {target}",
+                                    i18n::t("Clé importée pour", "Key imported for")
+                                ),
+                                cx,
+                            ),
+                            Err(error) => self.set_status(error, cx),
+                        }
+                    } else {
+                        self.set_status(
+                            i18n::t(
+                                "Usage : /encrypt set-key cible clé-base64",
+                                "Usage: /encrypt set-key target base64-key",
+                            ),
+                            cx,
+                        );
+                    }
+                }
+                "list" => {
+                    let targets = {
+                        let model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+                        model
+                            .encryption
+                            .as_ref()
+                            .map(|encryption| encryption.targets())
+                            .unwrap_or_default()
+                    };
+                    self.set_status(
+                        if targets.is_empty() {
+                            i18n::t("Aucune clé configurée.", "No key configured.").to_string()
+                        } else {
+                            targets.join(", ")
+                        },
+                        cx,
+                    );
+                }
+                "remove" => {
+                    let target = parts.next().map(str::to_string).or(active_target);
+                    if let Some(target) = target {
+                        let removed = {
+                            let mut model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+                            model
+                                .encryption
+                                .as_mut()
+                                .is_some_and(|encryption| encryption.remove(&target))
+                        };
+                        self.set_status(
+                            if removed {
+                                format!(
+                                    "{} {target}",
+                                    i18n::t("Chiffrement retiré pour", "Encryption removed for")
+                                )
+                            } else {
+                                format!("{} {target}", i18n::t("Aucune clé pour", "No key for"))
+                            },
+                            cx,
+                        );
+                    }
+                }
+                _ => self.set_status(
+                    i18n::t(
+                        "Usage : /encrypt generate|set|set-key|list|remove",
+                        "Usage: /encrypt generate|set|set-key|list|remove",
+                    ),
+                    cx,
+                ),
+            }
+            self.input.update(cx, |input, cx| input.clear(cx));
+            return true;
+        }
+        if trimmed == "/proxy" || trimmed == "/proxy off" {
+            self.config.proxy.clear();
+            if let Err(error) = self.config.save() {
+                log::warn!("sauvegarde du proxy impossible : {error}");
+            }
+            self.reconnect_with_proxy(cx);
+            self.set_status(i18n::t("Proxy désactivé.", "Proxy disabled."), cx);
+            self.input.update(cx, |input, cx| input.clear(cx));
+            return true;
+        }
+        if let Some(proxy) = trimmed.strip_prefix("/proxy ") {
+            let proxy = proxy.trim();
+            let valid = proxy
+                .rsplit_once(':')
+                .is_some_and(|(_, port)| port.parse::<u16>().is_ok());
+            if !valid {
+                self.set_status(
+                    i18n::t(
+                        "Usage : /proxy hôte:port (ou /proxy off)",
+                        "Usage: /proxy host:port (or /proxy off)",
+                    ),
+                    cx,
+                );
+            } else {
+                self.config.proxy = proxy.to_string();
+                if let Err(error) = self.config.save() {
+                    log::warn!("sauvegarde du proxy impossible : {error}");
+                }
+                self.reconnect_with_proxy(cx);
+                self.set_status(
+                    format!("{} {}", i18n::t("Proxy SOCKS5 :", "SOCKS5 proxy:"), proxy),
+                    cx,
+                );
+            }
+            self.input.update(cx, |input, cx| input.clear(cx));
+            return true;
+        }
         if trimmed == "/quiet" || trimmed == "/quiet off" {
             self.config.quiet_hours_start.clear();
             self.config.quiet_hours_end.clear();
@@ -5974,6 +6631,81 @@ impl AppRoot {
                 },
                 cx,
             );
+            self.input.update(cx, |input, cx| input.clear(cx));
+            return true;
+        }
+        if trimmed == "/paste" {
+            if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                let text = text.trim_end().to_string();
+                if text.is_empty() {
+                    self.set_status(
+                        i18n::t("Le presse-papiers est vide.", "The clipboard is empty."),
+                        cx,
+                    );
+                } else if text.lines().count() >= 5 {
+                    self.share_text(
+                        format!(
+                            "Le Salon — {}\n\n{text}\n",
+                            i18n::t("texte collé", "pasted text")
+                        ),
+                        format!("le-salon-paste-{}.txt", Local::now().timestamp()),
+                        cx,
+                    );
+                } else {
+                    self.send_command(format!("/say {text}"), cx);
+                }
+            }
+            self.input.update(cx, |input, cx| input.clear(cx));
+            return true;
+        }
+        if trimmed == "/share" || trimmed.starts_with("/share ") {
+            let msgid = trimmed.strip_prefix("/share").unwrap_or("").trim();
+            let line = {
+                let model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+                model.active_buffer().and_then(|buffer| {
+                    let line = if msgid.is_empty() {
+                        buffer.messages.back()
+                    } else {
+                        buffer
+                            .messages
+                            .iter()
+                            .rev()
+                            .find(|line| line.msgid.as_deref() == Some(msgid))
+                    }?;
+                    Some(line.clone())
+                })
+            };
+            if let Some(line) = line {
+                let buffer_id = self
+                    .active_context()
+                    .map(|(_, id, _, _)| id)
+                    .unwrap_or_default();
+                self.share_message(buffer_id, &line, cx);
+            } else {
+                self.set_status(
+                    i18n::t(
+                        "Message introuvable pour /share.",
+                        "Message not found for /share.",
+                    ),
+                    cx,
+                );
+            }
+            self.input.update(cx, |input, cx| input.clear(cx));
+            return true;
+        }
+        if trimmed == "/excerpt" || trimmed.starts_with("/excerpt ") {
+            let count = trimmed
+                .strip_prefix("/excerpt")
+                .unwrap_or("")
+                .trim()
+                .parse::<usize>()
+                .unwrap_or(20)
+                .clamp(1, 20);
+            if let Some((_, buffer_id, _, _)) = self.active_context() {
+                self.share_excerpt(buffer_id, count, cx);
+            } else {
+                self.set_status(i18n::t("Aucun salon actif.", "No active channel."), cx);
+            }
             self.input.update(cx, |input, cx| input.clear(cx));
             return true;
         }
@@ -6922,6 +7654,9 @@ impl Render for AppRoot {
         if self.saved_open {
             root = root.child(self.render_saved_dialog(cx));
         }
+        if self.moderation.is_some() {
+            root = root.child(self.render_moderation_dialog(cx));
+        }
         if self.activity_open {
             root = root.child(self.render_activity_dialog(cx));
         }
@@ -6972,6 +7707,7 @@ impl Render for AppRoot {
             && !self.saved_open
             && !self.activity_open
             && !self.palette_open
+            && self.moderation.is_none()
             && self.pending_upload.is_none()
         {
             self.should_focus_input = false;

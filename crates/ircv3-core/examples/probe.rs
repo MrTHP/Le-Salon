@@ -72,6 +72,7 @@ fn main() {
         sasl_password: sasl_pass,
         channels: vec![channel],
         auto_reconnect: false,
+        proxy: None,
     };
 
     let model = Arc::new(Mutex::new(AppModel::new(config)));

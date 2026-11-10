@@ -347,6 +347,7 @@ mod tests {
                 sasl_password: None,
                 channels: vec![],
                 auto_reconnect: false,
+                proxy: None,
             })
         };
         let (wake, _rx) = async_channel::bounded(1);

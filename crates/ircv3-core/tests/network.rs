@@ -39,6 +39,7 @@ fn plain_tcp_cap_join_and_message() {
         sasl_password: None,
         channels: vec!["#test".into()],
         auto_reconnect: false,
+        proxy: None,
     };
     let model = Arc::new(Mutex::new(AppModel::new(config)));
     let (wake_tx, _wake_rx) = async_channel::bounded(1);
@@ -161,6 +162,7 @@ fn sasl_without_tls_is_refused_before_connecting() {
         sasl_password: Some("secret".into()),
         channels: Vec::new(),
         auto_reconnect: false,
+        proxy: None,
     };
     let model = Arc::new(Mutex::new(AppModel::new(Config::default())));
     let (wake_tx, _wake_rx) = async_channel::bounded(1);

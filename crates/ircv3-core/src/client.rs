@@ -41,6 +41,7 @@ enum ThreadCommand {
     DccSend { nick: String, path: PathBuf },
     DccCancel(Option<u64>),
     Reconnect,
+    ReconnectWith(ConnectionConfig),
     Disconnect,
     Shutdown,
 }
@@ -122,6 +123,10 @@ impl NetworkHandle {
         let _ = self.tx.send(ThreadCommand::Reconnect);
     }
 
+    pub fn reconnect_with(&self, config: ConnectionConfig) {
+        let _ = self.tx.send(ThreadCommand::ReconnectWith(config));
+    }
+
     pub fn disconnect(&self) {
         let _ = self.tx.send(ThreadCommand::Disconnect);
     }
@@ -161,7 +166,7 @@ pub fn spawn(
 
 fn run(
     network_id: NetworkId,
-    config: ConnectionConfig,
+    mut config: ConnectionConfig,
     model: Arc<Mutex<AppModel>>,
     wake: Wake,
     rx: mpsc::Receiver<ThreadCommand>,
@@ -186,6 +191,13 @@ fn run(
             match connect_and_run(&mut session, &config, &rx) {
                 EndReason::Shutdown => break,
                 EndReason::Reconnect => {
+                    session.reset_for_reconnect();
+                    attempts = 0;
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+                EndReason::ReconnectWith(new_config) => {
+                    config = new_config;
+                    session.config = config.clone();
                     session.reset_for_reconnect();
                     attempts = 0;
                     std::thread::sleep(Duration::from_millis(500));
@@ -216,6 +228,13 @@ fn run(
                             WaitResult::Timeout | WaitResult::Reconnect => {
                                 should_connect = true;
                                 auto_reconnect = config.auto_reconnect;
+                            }
+                            WaitResult::ReconnectWith(new_config) => {
+                                config = new_config;
+                                session.config = config.clone();
+                                should_connect = true;
+                                auto_reconnect = config.auto_reconnect;
+                                attempts = 0;
                             }
                             WaitResult::Disconnect => {
                                 should_connect = false;
@@ -257,6 +276,13 @@ fn run(
                     auto_reconnect = config.auto_reconnect;
                     should_connect = true;
                 }
+                Ok(ThreadCommand::ReconnectWith(new_config)) => {
+                    config = new_config;
+                    session.config = config.clone();
+                    attempts = 0;
+                    auto_reconnect = config.auto_reconnect;
+                    should_connect = true;
+                }
                 Ok(ThreadCommand::Disconnect) => {}
                 Ok(ThreadCommand::Shutdown) | Err(_) => break,
             }
@@ -267,6 +293,7 @@ fn run(
 enum EndReason {
     Shutdown,
     Reconnect,
+    ReconnectWith(ConnectionConfig),
     UserDisconnect(Option<String>),
     Failed { message: String, retryable: bool },
 }
@@ -274,6 +301,7 @@ enum EndReason {
 enum WaitResult {
     Timeout,
     Reconnect,
+    ReconnectWith(ConnectionConfig),
     Disconnect,
     Shutdown,
 }
@@ -303,6 +331,7 @@ fn wait_for_command(
                 session.local_error("Connexion perdue : DCC impossible.");
             }
             Ok(ThreadCommand::Reconnect) => return WaitResult::Reconnect,
+            Ok(ThreadCommand::ReconnectWith(config)) => return WaitResult::ReconnectWith(config),
             Ok(ThreadCommand::Disconnect) => return WaitResult::Disconnect,
             Ok(ThreadCommand::Shutdown) => return WaitResult::Shutdown,
             Err(mpsc::RecvTimeoutError::Timeout) => return WaitResult::Timeout,
@@ -317,7 +346,7 @@ fn connect_and_run(
     rx: &mpsc::Receiver<ThreadCommand>,
 ) -> EndReason {
     session.note_connecting();
-    let tcp = match connect_tcp(&config.host, config.port) {
+    let tcp = match connect_tcp(&config.host, config.port, config.proxy.as_deref()) {
         Ok(tcp) => tcp,
         Err(error) => {
             return EndReason::Failed {
@@ -416,6 +445,10 @@ fn connect_and_run(
                     let _ = send_line(&mut wire, "QUIT :reconnexion");
                     return EndReason::Reconnect;
                 }
+                Ok(ThreadCommand::ReconnectWith(config)) => {
+                    let _ = send_line(&mut wire, "QUIT :reconnexion");
+                    return EndReason::ReconnectWith(config);
+                }
                 Ok(ThreadCommand::Disconnect) => {
                     let _ = send_line(&mut wire, "QUIT :déconnexion");
                     return EndReason::UserDisconnect(Some("déconnexion demandée".to_string()));
@@ -498,7 +531,26 @@ fn connect_and_run(
     }
 }
 
-fn connect_tcp(host: &str, port: u16) -> Result<TcpStream, String> {
+fn connect_tcp(host: &str, port: u16, proxy: Option<&str>) -> Result<TcpStream, String> {
+    let Some(proxy) = proxy.map(str::trim).filter(|proxy| !proxy.is_empty()) else {
+        return connect_direct(host, port);
+    };
+    let proxy = proxy
+        .strip_prefix("socks5://")
+        .or_else(|| proxy.strip_prefix("socks5h://"))
+        .unwrap_or(proxy);
+    let (credentials, endpoint) = match proxy.rsplit_once('@') {
+        Some((credentials, endpoint)) => (Some(credentials), endpoint),
+        None => (None, proxy),
+    };
+    let (proxy_host, proxy_port) =
+        split_host_port(endpoint).ok_or_else(|| format!("proxy SOCKS5 invalide : {endpoint}"))?;
+    let mut stream = connect_direct(&proxy_host, proxy_port)?;
+    socks5_handshake(&mut stream, host, port, credentials)?;
+    Ok(stream)
+}
+
+fn connect_direct(host: &str, port: u16) -> Result<TcpStream, String> {
     let addrs: Vec<_> = (host, port)
         .to_socket_addrs()
         .map_err(|error| format!("résolution DNS de {host} impossible : {error}"))?
@@ -518,6 +570,109 @@ fn connect_tcp(host: &str, port: u16) -> Result<TcpStream, String> {
         }
     }
     Err(last_error)
+}
+
+fn split_host_port(endpoint: &str) -> Option<(String, u16)> {
+    if let Some(rest) = endpoint.strip_prefix('[') {
+        let (host, rest) = rest.split_once(']')?;
+        let port = rest.strip_prefix(':')?.parse().ok()?;
+        return Some((host.to_string(), port));
+    }
+    let (host, port) = endpoint.rsplit_once(':')?;
+    Some((host.to_string(), port.parse().ok()?))
+}
+
+fn socks5_handshake(
+    stream: &mut TcpStream,
+    host: &str,
+    port: u16,
+    credentials: Option<&str>,
+) -> Result<(), String> {
+    let _ = stream.set_read_timeout(Some(CONNECT_TIMEOUT));
+    let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
+    let (user, password) = credentials
+        .map(|value| value.split_once(':').unwrap_or((value, "")))
+        .map(|(user, password)| (user.as_bytes(), password.as_bytes()))
+        .unwrap_or((&[], &[]));
+    let use_auth = !user.is_empty();
+    let greeting: &[u8] = if use_auth {
+        &[0x05, 0x02, 0x00, 0x02]
+    } else {
+        &[0x05, 0x01, 0x00]
+    };
+    stream
+        .write_all(greeting)
+        .map_err(|error| format!("proxy SOCKS5 : écriture impossible : {error}"))?;
+    let mut reply = [0u8; 2];
+    stream
+        .read_exact(&mut reply)
+        .map_err(|error| format!("proxy SOCKS5 : réponse illisible : {error}"))?;
+    if reply[0] != 0x05 {
+        return Err("proxy SOCKS5 : version invalide".into());
+    }
+    match reply[1] {
+        0x00 => {}
+        0x02 if use_auth => {
+            if user.len() > 255 || password.len() > 255 {
+                return Err("proxy SOCKS5 : identifiants trop longs".into());
+            }
+            let mut auth = Vec::with_capacity(3 + user.len() + password.len());
+            auth.extend_from_slice(&[0x01, user.len() as u8]);
+            auth.extend_from_slice(user);
+            auth.push(password.len() as u8);
+            auth.extend_from_slice(password);
+            stream
+                .write_all(&auth)
+                .map_err(|error| format!("proxy SOCKS5 : authentification impossible : {error}"))?;
+            let mut auth_reply = [0u8; 2];
+            stream.read_exact(&mut auth_reply).map_err(|error| {
+                format!("proxy SOCKS5 : réponse d'authentification illisible : {error}")
+            })?;
+            if auth_reply[1] != 0x00 {
+                return Err("proxy SOCKS5 : authentification refusée".into());
+            }
+        }
+        0xff => return Err("proxy SOCKS5 : aucune méthode acceptée".into()),
+        _ => return Err("proxy SOCKS5 : méthode d'authentification non supportée".into()),
+    }
+
+    if host.len() > 255 {
+        return Err("proxy SOCKS5 : nom d'hôte trop long".into());
+    }
+    let mut request = Vec::with_capacity(7 + host.len());
+    request.extend_from_slice(&[0x05, 0x01, 0x00, 0x03, host.len() as u8]);
+    request.extend_from_slice(host.as_bytes());
+    request.extend_from_slice(&port.to_be_bytes());
+    stream
+        .write_all(&request)
+        .map_err(|error| format!("proxy SOCKS5 : connexion impossible : {error}"))?;
+    let mut header = [0u8; 4];
+    stream
+        .read_exact(&mut header)
+        .map_err(|error| format!("proxy SOCKS5 : réponse de connexion illisible : {error}"))?;
+    if header[0] != 0x05 || header[1] != 0x00 {
+        return Err(format!(
+            "proxy SOCKS5 : connexion refusée (code {})",
+            header[1]
+        ));
+    }
+    let address_len = match header[3] {
+        0x01 => 4,
+        0x03 => {
+            let mut length = [0u8; 1];
+            stream
+                .read_exact(&mut length)
+                .map_err(|error| format!("proxy SOCKS5 : adresse illisible : {error}"))?;
+            usize::from(length[0])
+        }
+        0x04 => 16,
+        other => return Err(format!("proxy SOCKS5 : type d'adresse inconnu ({other})")),
+    };
+    let mut discard = vec![0u8; address_len + 2];
+    stream
+        .read_exact(&mut discard)
+        .map_err(|error| format!("proxy SOCKS5 : fin de réponse illisible : {error}"))?;
+    Ok(())
 }
 
 enum Wire {

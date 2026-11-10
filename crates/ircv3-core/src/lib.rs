@@ -13,6 +13,7 @@
 pub mod client;
 pub mod commands;
 pub mod config;
+pub mod crypto;
 pub mod dcc;
 pub mod formatting;
 pub mod history;
@@ -25,6 +26,7 @@ pub mod secrets;
 pub mod upload;
 
 pub use config::{Config, ConnectionConfig};
+pub use crypto::EncryptionStore;
 pub use history::{HistoryStore, SearchHit};
 pub use i18n::Lang;
 pub use message::{Message, Prefix, Tag};

@@ -7,6 +7,7 @@ mod chat;
 mod connect_form;
 mod drafts;
 mod emoji;
+mod http;
 mod i18n;
 mod menu;
 mod preferences;
@@ -195,6 +196,7 @@ fn main() {
 
     Application::new()
         .with_assets(assets::Assets)
+        .with_http_client(std::sync::Arc::new(http::ReqwestClient::new()))
         .run(move |cx: &mut App| {
             app::install_bindings(cx);
             cx.set_menus(vec![Menu {

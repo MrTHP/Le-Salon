@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     config::{Config, ConnectionConfig},
+    crypto::EncryptionStore,
     formatting::{self, FormatSpan},
     history::HistoryStore,
     irc_fold,
@@ -592,6 +593,8 @@ pub struct AppModel {
     /// Stockage local de l'historique. Désactivé dans les tests et les
     /// utilisations embarquées qui ne doivent rien écrire sur le disque.
     pub history: Option<HistoryStore>,
+    /// Clés de chiffrement RelayCrypt par cible.
+    pub encryption: Option<EncryptionStore>,
 }
 
 impl AppModel {
@@ -607,11 +610,16 @@ impl AppModel {
             channel_lists: HashMap::new(),
             version: 0,
             history: None,
+            encryption: None,
         }
     }
 
     pub fn enable_history(&mut self, history: HistoryStore) {
         self.history = Some(history);
+    }
+
+    pub fn enable_encryption(&mut self, encryption: EncryptionStore) {
+        self.encryption = Some(encryption);
     }
 
     pub fn alloc_id(&mut self) -> u64 {
@@ -1284,6 +1292,7 @@ mod tests {
             sasl_password: None,
             channels: vec!["#test".into()],
             auto_reconnect: true,
+            proxy: None,
         }
     }
 

@@ -41,6 +41,52 @@ impl MediaKind {
     }
 }
 
+impl MediaLink {
+    /// URL de vignette utilisable inline, quand elle peut être déduite sans
+    /// requête supplémentaire.
+    pub fn thumbnail_url(&self) -> Option<String> {
+        match self.kind {
+            MediaKind::Image => Some(self.url.clone()),
+            MediaKind::YouTube => {
+                youtube_id(&self.url).map(|id| format!("https://i.ytimg.com/vi/{id}/hqdefault.jpg"))
+            }
+            _ => None,
+        }
+    }
+}
+
+fn youtube_id(url: &str) -> Option<String> {
+    let without_scheme = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    let (host, path_and_query) = without_scheme
+        .split_once('/')
+        .unwrap_or((without_scheme, ""));
+    let host = host.split('@').next_back().unwrap_or(host).to_lowercase();
+    let candidate = if host == "youtu.be" {
+        path_and_query.split(['/', '?', '#']).next()
+    } else if host == "youtube.com" || host.ends_with(".youtube.com") {
+        if let Some(rest) = path_and_query.strip_prefix("watch?") {
+            rest.split('&')
+                .find_map(|part| part.strip_prefix("v="))
+                .map(|value| value.split(['&', '#']).next().unwrap_or(value))
+        } else if let Some(rest) = path_and_query.strip_prefix("shorts/") {
+            rest.split(['/', '?', '#']).next()
+        } else if let Some(rest) = path_and_query.strip_prefix("embed/") {
+            rest.split(['/', '?', '#']).next()
+        } else {
+            None
+        }
+    } else {
+        None
+    }?;
+    let valid = candidate.len() == 11
+        && candidate
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'));
+    valid.then(|| candidate.to_string())
+}
+
 pub fn find_media(text: &str) -> Option<MediaLink> {
     for token in text.split_whitespace() {
         let url = token.trim_matches(|c: char| {

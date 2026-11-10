@@ -57,6 +57,7 @@ const REQUESTED_CAPS: &[&str] = &[
     "userhost-in-names",
     "typing",
     "chghost",
+    "draft/multiline",
 ];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -107,6 +108,7 @@ pub struct Session {
     last_ping: Instant,
     last_received: Instant,
     next_ping: u64,
+    next_batch_id: u64,
     batches: Vec<Batch>,
     join_sent: bool,
     nick_retries: u8,
@@ -141,6 +143,7 @@ impl Session {
             last_ping: now,
             last_received: now,
             next_ping: 0,
+            next_batch_id: 0,
             batches: Vec::new(),
             join_sent: false,
             nick_retries: 0,
@@ -1496,6 +1499,8 @@ impl Session {
             return Vec::new();
         }
         let self_nick = irc_fold(&from) == irc_fold(&self.nick);
+        let conversation = self.conversation_target(&from, &target, self_nick);
+        let raw = self.read_text(&conversation, &raw);
         let mut kind = LineKind::Message;
         let mut text = raw.clone();
         if raw.starts_with('\u{01}') && raw.ends_with('\u{01}') && raw.len() >= 2 {
@@ -1566,6 +1571,8 @@ impl Session {
             return Vec::new();
         }
         let self_nick = irc_fold(&from) == irc_fold(&self.nick);
+        let conversation = self.conversation_target(&from, &target, self_nick);
+        let text = self.read_text(&conversation, &text);
         let buffer = self.conversation_buffer(&from, &target, self_nick);
         if self_nick && self.dedupe_self_echo(buffer, &text) {
             return Vec::new();
@@ -2072,6 +2079,81 @@ impl Session {
         self.wake();
     }
 
+    fn conversation_target(&self, from: &str, target: &str, self_nick: bool) -> String {
+        if is_channel_name(target) {
+            target.to_string()
+        } else if self_nick {
+            target.to_string()
+        } else {
+            from.to_string()
+        }
+    }
+
+    fn wire_text(&self, target: &str, text: &str) -> String {
+        self.with_model(|model| {
+            model
+                .encryption
+                .as_ref()
+                .and_then(|encryption| encryption.encrypt(target, text))
+        })
+        .unwrap_or_else(|| text.to_string())
+    }
+
+    fn read_text(&self, target: &str, text: &str) -> String {
+        if !crate::crypto::is_encrypted(text) {
+            return text.to_string();
+        }
+        self.with_model(|model| {
+            model
+                .encryption
+                .as_ref()
+                .and_then(|encryption| encryption.decrypt(target, text))
+        })
+        .unwrap_or_else(|| {
+            t(
+                "🔒 message chiffré (clé absente)",
+                "🔒 encrypted message (missing key)",
+            )
+            .to_string()
+        })
+    }
+
+    fn push_multiline(
+        &mut self,
+        outcome: &mut UserOutcome,
+        target: &str,
+        text: &str,
+        reply_to: Option<&str>,
+    ) -> bool {
+        if !self.caps_acked.contains("draft/multiline") || !text.contains('\n') {
+            return false;
+        }
+        self.next_batch_id = self.next_batch_id.wrapping_add(1).max(1);
+        let id = format!("ml{}", self.next_batch_id);
+        outcome
+            .lines
+            .push(format!("BATCH +{id} draft/multiline {target}"));
+        for line in text.split('\n') {
+            let mut tags = vec![format!("batch={id}")];
+            if let Some(reply_to) = reply_to {
+                tags.push(format!("+draft/reply={reply_to}"));
+            }
+            outcome
+                .lines
+                .push(format!("@{} PRIVMSG {target} :{line}", tags.join(";")));
+        }
+        outcome.lines.push(format!("BATCH -{id}"));
+        self.local_echo_meta(
+            target,
+            LineKind::Message,
+            text,
+            false,
+            None,
+            reply_to.map(str::to_string),
+        );
+        true
+    }
+
     pub fn handle_user_input(&mut self, input: &str) -> UserOutcome {
         let mut outcome = UserOutcome::default();
         let active = self.with_model(|model| {
@@ -2092,17 +2174,21 @@ impl Session {
                 if is_channel_name(&target) && self.caps_acked.contains("typing") {
                     outcome.lines.push(format!("@+typing=done TAGMSG {target}"));
                 }
-                outcome.lines.push(format!("PRIVMSG {target} :{text}"));
+                let wire = self.wire_text(&target, &text);
+                if self.push_multiline(&mut outcome, &target, &wire, None) {
+                    return outcome;
+                }
+                outcome.lines.push(format!("PRIVMSG {target} :{wire}"));
                 self.local_echo(&target, LineKind::Message, &text, false);
             }
             ParsedCommand::Action { target, text } => {
-                outcome
-                    .lines
-                    .push(format!("PRIVMSG {target} :\u{01}ACTION {text}\u{01}"));
+                let wire = self.wire_text(&target, &format!("\u{01}ACTION {text}\u{01}"));
+                outcome.lines.push(format!("PRIVMSG {target} :{wire}"));
                 self.local_echo(&target, LineKind::Action, &text, false);
             }
             ParsedCommand::Notice { target, text } => {
-                outcome.lines.push(format!("NOTICE {target} :{text}"));
+                let wire = self.wire_text(&target, &text);
+                outcome.lines.push(format!("NOTICE {target} :{wire}"));
                 self.local_echo(&target, LineKind::Notice, &text, true);
             }
             ParsedCommand::Ctcp { target, payload } => {
@@ -2146,7 +2232,11 @@ impl Session {
                         if self.caps_acked.contains("typing") {
                             outcome.lines.push(format!("@+typing=done TAGMSG {target}"));
                         }
-                        outcome.lines.push(format!("PRIVMSG {target} :{text}"));
+                        let wire = self.wire_text(&target, &text);
+                        if self.push_multiline(&mut outcome, &target, &wire, None) {
+                            return outcome;
+                        }
+                        outcome.lines.push(format!("PRIVMSG {target} :{wire}"));
                         self.local_echo(&target, LineKind::Message, &text, false);
                     }
                 }
@@ -2156,9 +2246,13 @@ impl Session {
                 msgid,
                 text,
             } => {
+                let wire = self.wire_text(&target, &text);
+                if self.push_multiline(&mut outcome, &target, &wire, Some(&msgid)) {
+                    return outcome;
+                }
                 outcome
                     .lines
-                    .push(format!("@+draft/reply={msgid} PRIVMSG {target} :{text}"));
+                    .push(format!("@+draft/reply={msgid} PRIVMSG {target} :{wire}"));
                 self.local_echo_meta(&target, LineKind::Message, &text, false, None, Some(msgid));
             }
             ParsedCommand::React {
@@ -2630,6 +2724,7 @@ mod tests {
             sasl_password: None,
             channels: vec!["#test".into()],
             auto_reconnect: false,
+            proxy: None,
         };
         let network_id = model.lock().unwrap().add_network(config.clone());
         let (wake, _rx) = async_channel::bounded(1);
@@ -2844,6 +2939,55 @@ mod tests {
     }
 
     #[test]
+    fn multiline_messages_use_batch() {
+        let (mut session, _model) = session();
+        session.on_line(":irc.test CAP * LS :draft/multiline");
+        session.on_line(":irc.test CAP * ACK :draft/multiline");
+        session.on_line(":irc.test 001 moi :Bienvenue");
+        session.on_line(":moi!m@h JOIN #test");
+        let outcome = session.handle_user_input("bonjour\nmonde");
+        assert_eq!(
+            outcome.lines,
+            vec![
+                "BATCH +ml1 draft/multiline #test",
+                "@batch=ml1 PRIVMSG #test :bonjour",
+                "@batch=ml1 PRIVMSG #test :monde",
+                "BATCH -ml1",
+            ]
+        );
+    }
+
+    #[test]
+    fn encrypted_private_messages_roundtrip() {
+        let (mut session, model) = session();
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("le-salon-crypto-{stamp}.json"));
+        let mut store = crate::crypto::EncryptionStore::new(&path);
+        store.generate_key("alice");
+        model.lock().unwrap().enable_encryption(store);
+
+        let outcome = session.handle_user_input("/msg alice bonjour");
+        let line = outcome.lines.last().unwrap();
+        let prefix = "PRIVMSG alice :";
+        assert!(line.starts_with(prefix));
+        let payload = line.strip_prefix(prefix).unwrap().to_string();
+        assert!(payload.starts_with("+relaycrypt:v1:"));
+
+        session.on_line(&format!(":alice!a@h PRIVMSG moi :{payload}"));
+        let model = model.lock().unwrap();
+        let network = model.active_network().unwrap();
+        let query = model
+            .find_buffer(network.id, BufferKind::Query, "alice")
+            .unwrap();
+        let last = model.buffer(query).unwrap().messages.back().unwrap();
+        assert_eq!(last.text, "bonjour");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn sasl_payload_is_sent() {
         let model = Arc::new(Mutex::new(AppModel::new(Config::default())));
         let config = ConnectionConfig {
@@ -2858,6 +3002,7 @@ mod tests {
             sasl_password: Some("secret".into()),
             channels: vec![],
             auto_reconnect: false,
+            proxy: None,
         };
         let network_id = model.lock().unwrap().add_network(config.clone());
         let (wake, _rx) = async_channel::bounded(1);

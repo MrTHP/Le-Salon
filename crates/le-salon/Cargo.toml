@@ -11,12 +11,15 @@ name = "le-salon"
 path = "src/main.rs"
 
 [dependencies]
+anyhow.workspace = true
 async-channel.workspace = true
 chrono.workspace = true
 env_logger.workspace = true
+futures = "0.3"
 gpui.workspace = true
 ircv3-core = { path = "../ircv3-core" }
 log.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 unicode-segmentation.workspace = true

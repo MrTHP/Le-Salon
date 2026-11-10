@@ -125,8 +125,16 @@ navigateur embarqué.
   `scheduled.json` ;
 * **Jitsi** : ouverture de l’appel dans le navigateur et lien posté dans le
   salon ;
-* **liens vidéo / audio / image** : détection automatique et bouton pour
-  ouvrir le média dans le navigateur ou le lecteur système ;
+* **liens vidéo / audio / image** : détection automatique, vignettes inline
+  pour les images et YouTube, et bouton pour ouvrir le média dans le
+  navigateur ou le lecteur système ;
+* **messages multilignes** (`draft/multiline`) via `/paste` et collage de
+  plusieurs lignes ;
+* **thèmes import/export** en JSON, **proxy SOCKS5**, **chiffrement
+  RelayCrypt** XChaCha20-Poly1305 et **modération guidée** avec aperçu exact
+  des commandes ;
+* **partage** de messages et d’extraits via des liens expirants, et paste
+  links automatiques pour les longs textes ;
 * **À propos** : dialogue avec version, fonctions et licence.
 
 > **Note importante** : GPUI n’intègre pas de moteur web. Jitsi et les vidéos
@@ -257,6 +265,11 @@ Fonctions locales :
 | `/mute` | coupe les notifications du tampon actif |
 | `/quiet 22:00 08:00` | définit les heures calmes |
 | `/sound on\|off` | active ou coupe les sons |
+| `/paste` | envoie le presse-papiers en multiligne ou en paste link |
+| `/share [msgid]` | partage un message via un lien expirant |
+| `/excerpt [n]` | partage les n derniers messages (20 max) |
+| `/proxy hôte:port` | utilise un proxy SOCKS5 |
+| `/encrypt generate\|set\|set-key\|list\|remove` | gère le chiffrement RelayCrypt |
 
 ### Raccourcis
 
@@ -438,8 +451,16 @@ framework: GPU rendering, fast startup, no Electron and no embedded browser.
 * **scheduled messages**: `+10m`, `18:30`, full date, persisted in
   `scheduled.json`;
 * **Jitsi**: opens the call in the browser and posts the link to the channel;
-* **video / audio / image links**: automatic detection and a button to open
-  the media in the system browser or player;
+* **video / audio / image links**: automatic detection, inline thumbnails
+  for images and YouTube, and a button to open the media in the system
+  browser or player;
+* **multiline messages** (`draft/multiline`) through `/paste` and multi-line
+  clipboard content;
+* **JSON theme import/export**, **SOCKS5 proxy**, **RelayCrypt encryption**
+  with XChaCha20-Poly1305 and **guided moderation** with an exact command
+  preview;
+* **sharing** messages and excerpts through expiring links, plus automatic
+  paste links for long text;
 * **About** dialog with version, features and license.
 
 > **Important note**: GPUI does not embed a web engine. Jitsi and videos
@@ -569,6 +590,11 @@ Local commands:
 | `/mute` | mute notifications for the active buffer |
 | `/quiet 22:00 08:00` | set quiet hours |
 | `/sound on\|off` | enable or disable sounds |
+| `/paste` | send the clipboard as multiline or paste link |
+| `/share [msgid]` | share a message through an expiring link |
+| `/excerpt [n]` | share the last n messages (20 max) |
+| `/proxy host:port` | use a SOCKS5 proxy |
+| `/encrypt generate\|set\|set-key\|list\|remove` | manage RelayCrypt encryption |
 
 ### Shortcuts
 

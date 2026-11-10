@@ -246,6 +246,7 @@ impl ConnectForm {
             sasl_password,
             channels: parse_channels(&channels),
             auto_reconnect: true,
+            proxy: None,
         }
         .normalized();
         if let Err(error) = connection.security_check() {

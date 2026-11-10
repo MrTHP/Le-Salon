@@ -3,9 +3,17 @@
 //! Le thème courant est global (AtomicUsize) : il est changé depuis le
 //! sélecteur de thèmes et toutes les vues le relisent au rendu suivant.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{
+        Mutex, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use gpui::{Hsla, rgb, rgba};
+use serde::{Deserialize, Serialize};
 
 use ircv3_core::model::{ConnectionStatus, LineKind};
 
@@ -582,32 +590,188 @@ pub static THEMES: &[Theme] = &[
     ),
 ];
 
+#[derive(Serialize, Deserialize)]
+struct ThemeFile {
+    key: String,
+    name_fr: String,
+    name_en: String,
+    bg: u32,
+    panel: u32,
+    panel_alt: u32,
+    input_bg: u32,
+    border: u32,
+    text: u32,
+    muted: u32,
+    faint: u32,
+    accent: u32,
+    accent_dark: u32,
+    accent_hover: u32,
+    on_accent: u32,
+    green: u32,
+    yellow: u32,
+    red: u32,
+    orange: u32,
+    purple: u32,
+    pink: u32,
+    nicks: [u32; 8],
+}
+
+impl ThemeFile {
+    fn from_theme(theme: &Theme) -> Self {
+        Self {
+            key: theme.key.to_string(),
+            name_fr: theme.name_fr.to_string(),
+            name_en: theme.name_en.to_string(),
+            bg: theme.bg,
+            panel: theme.panel,
+            panel_alt: theme.panel_alt,
+            input_bg: theme.input_bg,
+            border: theme.border,
+            text: theme.text,
+            muted: theme.muted,
+            faint: theme.faint,
+            accent: theme.accent,
+            accent_dark: theme.accent_dark,
+            accent_hover: theme.accent_hover,
+            on_accent: theme.on_accent,
+            green: theme.green,
+            yellow: theme.yellow,
+            red: theme.red,
+            orange: theme.orange,
+            purple: theme.purple,
+            pink: theme.pink,
+            nicks: theme.nicks,
+        }
+    }
+
+    fn into_theme(self) -> Theme {
+        let leak = |value: String| Box::leak(value.into_boxed_str()) as &'static str;
+        Theme {
+            key: leak(self.key),
+            name_fr: leak(self.name_fr),
+            name_en: leak(self.name_en),
+            bg: self.bg,
+            panel: self.panel,
+            panel_alt: self.panel_alt,
+            input_bg: self.input_bg,
+            border: self.border,
+            text: self.text,
+            muted: self.muted,
+            faint: self.faint,
+            accent: self.accent,
+            accent_dark: self.accent_dark,
+            accent_hover: self.accent_hover,
+            on_accent: self.on_accent,
+            green: self.green,
+            yellow: self.yellow,
+            red: self.red,
+            orange: self.orange,
+            purple: self.purple,
+            pink: self.pink,
+            nicks: self.nicks,
+        }
+    }
+}
+
 static CURRENT: AtomicUsize = AtomicUsize::new(0);
+static ALL_THEMES: OnceLock<Mutex<&'static [Theme]>> = OnceLock::new();
+
+fn all_themes() -> &'static Mutex<&'static [Theme]> {
+    ALL_THEMES.get_or_init(|| Mutex::new(THEMES))
+}
 
 pub fn themes() -> &'static [Theme] {
-    THEMES
+    *all_themes()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 pub fn current() -> &'static Theme {
-    &THEMES[CURRENT.load(Ordering::Relaxed).min(THEMES.len() - 1)]
+    let themes = themes();
+    &themes[CURRENT.load(Ordering::Relaxed).min(themes.len() - 1)]
 }
 
 pub fn current_index() -> usize {
-    CURRENT.load(Ordering::Relaxed).min(THEMES.len() - 1)
+    CURRENT
+        .load(Ordering::Relaxed)
+        .min(themes().len().saturating_sub(1))
 }
 
 pub fn set_theme(index: usize) {
-    if index < THEMES.len() {
+    if index < themes().len() {
         CURRENT.store(index, Ordering::Relaxed);
     }
 }
 
 pub fn set_theme_key(key: &str) -> usize {
-    if let Some(index) = THEMES.iter().position(|theme| theme.key == key) {
+    if let Some(index) = themes().iter().position(|theme| theme.key == key) {
         set_theme(index);
         index
     } else {
         current_index()
+    }
+}
+
+fn custom_theme_path() -> PathBuf {
+    ircv3_core::Config::path()
+        .parent()
+        .map(|parent| parent.join("custom-theme.json"))
+        .unwrap_or_else(|| PathBuf::from("custom-theme.json"))
+}
+
+pub fn export_current_json() -> String {
+    serde_json::to_string_pretty(&ThemeFile::from_theme(current()))
+        .unwrap_or_else(|_| "{}".to_string())
+}
+
+pub fn import_json(text: &str) -> Result<usize, String> {
+    let mut file: ThemeFile =
+        serde_json::from_str(text).map_err(|error| format!("thème invalide : {error}"))?;
+    if file.key.trim().is_empty() {
+        file.key = "custom".into();
+    }
+    let mut key = file.key.trim().to_string();
+    let themes = themes();
+    if themes.iter().any(|theme| theme.key == key) {
+        let base = key.clone();
+        let mut suffix = 2;
+        while themes.iter().any(|theme| theme.key == key) {
+            key = format!("{base}-{suffix}");
+            suffix += 1;
+        }
+    }
+    file.key = key;
+    if file.name_fr.trim().is_empty() {
+        file.name_fr = file.key.clone();
+    }
+    if file.name_en.trim().is_empty() {
+        file.name_en = file.name_fr.clone();
+    }
+    let theme = file.into_theme();
+    let index = themes.len();
+    let mut next = themes.to_vec();
+    next.push(theme);
+    let leaked: &'static [Theme] = Box::leak(next.into_boxed_slice());
+    *all_themes()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = leaked;
+    if let Some(parent) = custom_theme_path().parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Err(error) = fs::write(custom_theme_path(), export_index_json(index)) {
+        log::warn!("sauvegarde du thème importé impossible : {error}");
+    }
+    Ok(index)
+}
+
+fn export_index_json(index: usize) -> String {
+    let themes = themes();
+    serde_json::to_string_pretty(&ThemeFile::from_theme(&themes[index])).unwrap_or_default()
+}
+
+pub fn load_custom_theme() {
+    if let Ok(text) = fs::read_to_string(custom_theme_path()) {
+        let _ = import_json(&text);
     }
 }
 

@@ -46,16 +46,21 @@ pub enum MenuAction {
     Devoice(String),
     Kick(String),
     Ban(String),
+    BanKick(String),
     Invite(String),
     ReplyMessage(ChatLine),
     ReactMessage(BufferId, ChatLine),
     SaveMessage(BufferId, ChatLine),
+    ShareMessage(BufferId, ChatLine),
+    ShareExcerpt(BufferId),
     SearchMessages,
     SavedMessages,
     Activity,
     Palette,
     ToggleMute(String),
     TogglePin(String, BufferId),
+    ExportTheme,
+    ImportTheme,
 }
 
 #[derive(Clone, Debug)]
