@@ -71,6 +71,14 @@ impl BufferKind {
             Self::Query => "@",
         }
     }
+
+    pub fn storage_key(self) -> &'static str {
+        match self {
+            Self::Server => "server",
+            Self::Channel => "channel",
+            Self::Query => "query",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -262,6 +270,7 @@ pub struct Buffer {
     pub messages: VecDeque<ChatLine>,
     pub unread: u32,
     pub highlight: bool,
+    pub pinned: bool,
     pub joined: bool,
     pub typing: HashMap<String, Instant>,
     pub created_at: Option<DateTime<Local>>,
@@ -292,6 +301,7 @@ impl Buffer {
             messages: VecDeque::new(),
             unread: 0,
             highlight: false,
+            pinned: false,
             joined: matches!(kind, BufferKind::Server | BufferKind::Query),
             typing: HashMap::new(),
             created_at: None,
@@ -687,6 +697,23 @@ impl AppModel {
             .map(|network| format!("{}:{}", network.host, network.port))
     }
 
+    pub fn buffer_key(
+        &self,
+        network_id: NetworkId,
+        kind: BufferKind,
+        name: &str,
+    ) -> Option<String> {
+        self.network(network_id).map(|network| {
+            format!(
+                "{}:{}|{}|{}",
+                network.host,
+                network.port,
+                kind.storage_key(),
+                name
+            )
+        })
+    }
+
     pub fn buffer(&self, id: BufferId) -> Option<&Buffer> {
         self.buffers.get(&id)
     }
@@ -736,6 +763,9 @@ impl AppModel {
         let id = self.alloc_id();
         let mut buffer = Buffer::new(id, network_id, kind, name);
         buffer.joined = matches!(kind, BufferKind::Server | BufferKind::Query);
+        if let Some(key) = self.buffer_key(network_id, kind, name) {
+            buffer.pinned = self.config.pinned_buffers.contains(&key);
+        }
         if kind != BufferKind::Server
             && let (Some(history), Some(network)) = (&self.history, self.network(network_id))
         {

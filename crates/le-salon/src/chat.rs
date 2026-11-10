@@ -22,6 +22,7 @@ pub fn line_row(
     users: &HashMap<String, User>,
     replies: &HashMap<String, ChatLine>,
     index: usize,
+    bubbles: bool,
 ) -> AnyElement {
     let color = theme::line_color(line.kind);
     let mut row = div()
@@ -58,8 +59,25 @@ pub fn line_row(
                 theme::nick_color(nick)
             };
             let nick_text = format!("<{nick}>");
+            let body = message_body(line, font, color, replies);
+            let body = if bubbles {
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .rounded_md()
+                            .bg(theme::panel_alt())
+                            .px_2()
+                            .py_1()
+                            .child(body),
+                    )
+                    .into_any_element()
+            } else {
+                body
+            };
             row.child(nick_element(index, nick, nick_text, nick_color, users))
-                .child(message_body(line, font, color, replies))
+                .child(body)
                 .into_any_element()
         }
         LineKind::Action => {

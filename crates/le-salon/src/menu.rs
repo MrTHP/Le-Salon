@@ -55,6 +55,7 @@ pub enum MenuAction {
     Activity,
     Palette,
     ToggleMute(String),
+    TogglePin(String, BufferId),
 }
 
 #[derive(Clone, Debug)]

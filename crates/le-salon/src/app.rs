@@ -126,6 +126,7 @@ struct SidebarBuffer {
     highlight: bool,
     active: bool,
     joined: bool,
+    pinned: bool,
 }
 
 #[derive(Clone)]
@@ -1970,6 +1971,7 @@ impl AppRoot {
                                 highlight: buffer.highlight,
                                 active: model.active == Some(buffer.id),
                                 joined: buffer.joined,
+                                pinned: buffer.pinned,
                             })
                         })
                         .collect();
@@ -2186,6 +2188,15 @@ impl AppRoot {
                             })
                             .child(buffer.kind.icon()),
                     )
+                    .when(buffer.pinned, |row| {
+                        row.child(
+                            div()
+                                .flex_none()
+                                .text_size(px(10.))
+                                .text_color(theme::yellow())
+                                .child("★"),
+                        )
+                    })
                     .child(
                         div()
                             .flex_1()
@@ -2703,7 +2714,14 @@ impl AppRoot {
                             );
                         }),
                     )
-                    .child(chat::line_row(line, &font, &users, &replies, index))
+                    .child(chat::line_row(
+                        line,
+                        &font,
+                        &users,
+                        &replies,
+                        index,
+                        self.config.message_bubbles,
+                    ))
                     .into_any_element(),
             );
             if let Some(link) = media::find_media(&line.text) {
@@ -3270,6 +3288,11 @@ impl AppRoot {
     fn is_buffer_muted(&self, buffer_id: BufferId) -> bool {
         self.buffer_storage_key(buffer_id)
             .is_some_and(|key| self.config.muted_buffers.contains(&key))
+    }
+
+    fn is_buffer_pinned(&self, buffer_id: BufferId) -> bool {
+        let model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+        model.buffer(buffer_id).is_some_and(|buffer| buffer.pinned)
     }
 
     fn open_search(&mut self, cx: &mut Context<Self>) {
@@ -4102,6 +4125,20 @@ impl AppRoot {
                 .checked(muted),
             );
         }
+        if let Some(key) = self.buffer_storage_key(buffer_id) {
+            let pinned = self.is_buffer_pinned(buffer_id);
+            items.push(
+                MenuItem::new(
+                    if pinned {
+                        i18n::t("Retirer des favoris", "Remove from favorites")
+                    } else {
+                        i18n::t("Ajouter aux favoris", "Add to favorites")
+                    },
+                    MenuAction::TogglePin(key, buffer_id),
+                )
+                .checked(pinned),
+            );
+        }
         self.open_popup(position.x, position.y, items, cx);
     }
 
@@ -4141,6 +4178,20 @@ impl AppRoot {
                     MenuAction::ToggleMute(key),
                 )
                 .checked(muted),
+            );
+        }
+        if let Some(key) = self.buffer_storage_key(buffer_id) {
+            let pinned = self.is_buffer_pinned(buffer_id);
+            items.push(
+                MenuItem::new(
+                    if pinned {
+                        i18n::t("Retirer des favoris", "Remove from favorites")
+                    } else {
+                        i18n::t("Ajouter aux favoris", "Add to favorites")
+                    },
+                    MenuAction::TogglePin(key, buffer_id),
+                )
+                .checked(pinned),
             );
         }
         self.open_popup(position.x, position.y, items, cx);
@@ -4364,6 +4415,31 @@ impl AppRoot {
                 }
                 if let Err(error) = self.config.save() {
                     log::warn!("sauvegarde du tampon muet impossible : {error}");
+                }
+                cx.notify();
+            }
+            MenuAction::TogglePin(key, buffer_id) => {
+                let pinned = if let Some(index) = self
+                    .config
+                    .pinned_buffers
+                    .iter()
+                    .position(|existing| existing == &key)
+                {
+                    self.config.pinned_buffers.remove(index);
+                    false
+                } else {
+                    self.config.pinned_buffers.push(key);
+                    true
+                };
+                {
+                    let mut model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+                    model.config = self.config.clone();
+                    if let Some(buffer) = model.buffer_mut(buffer_id) {
+                        buffer.pinned = pinned;
+                    }
+                }
+                if let Err(error) = self.config.save() {
+                    log::warn!("sauvegarde des favoris impossible : {error}");
                 }
                 cx.notify();
             }
@@ -6922,22 +6998,7 @@ impl Drop for AppRoot {
 }
 
 fn storage_key(model: &AppModel, buffer: &ircv3_core::model::Buffer) -> Option<String> {
-    let network = model.network(buffer.network)?;
-    Some(format!(
-        "{}:{}|{}|{}",
-        network.host,
-        network.port,
-        buffer_kind_key(buffer.kind),
-        buffer.name
-    ))
-}
-
-fn buffer_kind_key(kind: BufferKind) -> &'static str {
-    match kind {
-        BufferKind::Server => "server",
-        BufferKind::Channel => "channel",
-        BufferKind::Query => "query",
-    }
+    model.buffer_key(buffer.network, buffer.kind, &buffer.name)
 }
 
 fn ordered_buffers(model: &AppModel) -> Vec<BufferId> {
@@ -6964,10 +7025,14 @@ fn ordered_buffers_for(model: &AppModel, network_id: NetworkId) -> Vec<BufferId>
         };
         let left_rank = left.map(|buffer| rank(buffer.kind)).unwrap_or(9);
         let right_rank = right.map(|buffer| rank(buffer.kind)).unwrap_or(9);
-        left_rank.cmp(&right_rank).then_with(|| {
-            irc_fold(left.map(|buffer| buffer.name.as_str()).unwrap_or("")).cmp(&irc_fold(
-                right.map(|buffer| buffer.name.as_str()).unwrap_or(""),
-            ))
+        let left_pinned = left.is_some_and(|buffer| buffer.pinned);
+        let right_pinned = right.is_some_and(|buffer| buffer.pinned);
+        right_pinned.cmp(&left_pinned).then_with(|| {
+            left_rank.cmp(&right_rank).then_with(|| {
+                irc_fold(left.map(|buffer| buffer.name.as_str()).unwrap_or("")).cmp(&irc_fold(
+                    right.map(|buffer| buffer.name.as_str()).unwrap_or(""),
+                ))
+            })
         })
     });
     ids

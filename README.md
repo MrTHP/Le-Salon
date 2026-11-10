@@ -80,6 +80,8 @@ navigateur embarqué.
   **palette de commandes** (`Ctrl+K`) ;
 * **notifications par tampon** (`/mute`), **heures calmes** (`/quiet 22:00
   08:00`) et sons de notification configurables ;
+* **bulles de messages** optionnelles et **favoris** épinglés en haut de
+  l’arborescence ;
 * liste des pseudos avec préfixes `~&@%+`, états absents et comptes ;
 * sujet, modes, population, état TLS, latence et capacités ;
 * **pseudo cliquable** dans la barre de saisie : un clic ouvre la fenêtre
@@ -117,7 +119,8 @@ navigateur embarqué.
 * **DCC SEND** direct : offre CTCP, transfert TCP, progression, annulation,
   taille 64 bits, panneau dédié ;
 * **upload litterbox** (public, 72 h, 50 Mo max) : sélecteur de fichier, lien
-  posté automatiquement dans le salon ;
+  posté automatiquement dans le salon ; les métadonnées EXIF/XMP des JPEG et
+  PNG sont retirées avant l’envoi ;
 * **messages planifiés** : `+10m`, `18:30`, date complète, persistés dans
   `scheduled.json` ;
 * **Jitsi** : ouverture de l’appel dans le navigateur et lien posté dans le
@@ -395,6 +398,8 @@ framework: GPU rendering, fast startup, no Electron and no embedded browser.
   **command palette** (`Ctrl+K`);
 * **per-buffer notifications** (`/mute`), **quiet hours** (`/quiet 22:00
   08:00`) and configurable notification sounds;
+* optional **message bubbles** and **favorites** pinned at the top of the
+  buffer tree;
 * nickname list with `~&@%+` prefixes, away state and accounts;
 * topic, modes, user count, TLS state, latency and capabilities;
 * **clickable nickname** in the input bar: opens a “Change nickname” dialog
@@ -428,7 +433,8 @@ framework: GPU rendering, fast startup, no Electron and no embedded browser.
 * **DCC SEND** direct: CTCP offer, TCP transfer, progress, cancellation,
   64-bit size, dedicated panel;
 * **litterbox upload** (public, 72 h, 50 MB max): file picker and automatic
-  link posted to the channel;
+  link posted to the channel; JPEG and PNG EXIF/XMP metadata is stripped
+  before upload;
 * **scheduled messages**: `+10m`, `18:30`, full date, persisted in
   `scheduled.json`;
 * **Jitsi**: opens the call in the browser and posts the link to the channel;

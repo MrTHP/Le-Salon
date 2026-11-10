@@ -19,6 +19,7 @@ pub struct Preferences {
     pub notifications: bool,
     pub in_app_toasts: bool,
     pub sound_notifications: bool,
+    pub message_bubbles: bool,
     pub toast_seconds: u64,
     pub confirm_upload: bool,
     pub notify_mentions_only: bool,
@@ -32,6 +33,7 @@ impl Preferences {
             notifications: config.notifications,
             in_app_toasts: config.in_app_toasts,
             sound_notifications: config.sound_notifications,
+            message_bubbles: config.message_bubbles,
             toast_seconds: config.toast_seconds.clamp(1, 10),
             confirm_upload: config.confirm_upload,
             notify_mentions_only: config.notify_mentions_only,
@@ -44,6 +46,7 @@ impl Preferences {
         config.notifications = self.notifications;
         config.in_app_toasts = self.in_app_toasts;
         config.sound_notifications = self.sound_notifications;
+        config.message_bubbles = self.message_bubbles;
         config.toast_seconds = self.toast_seconds.clamp(1, 10);
         config.confirm_upload = self.confirm_upload;
         config.notify_mentions_only = self.notify_mentions_only;
@@ -372,6 +375,20 @@ impl Render for PreferencesWindow {
                     cx,
                 ))
                 .child(self.toggle_row(
+                    "pref-message-bubbles",
+                    i18n::t("Bulles de messages", "Message bubbles"),
+                    i18n::t(
+                        "Afficher les messages dans des bulles arrondies.",
+                        "Show messages in rounded bubbles.",
+                    ),
+                    self.prefs.message_bubbles,
+                    |this, _, _, cx| {
+                        this.prefs.message_bubbles = !this.prefs.message_bubbles;
+                        cx.notify();
+                    },
+                    cx,
+                ))
+                .child(self.toggle_row(
                     "pref-mentions-only",
                     i18n::t(
                         "Mentions et messages privés uniquement",
@@ -577,6 +594,7 @@ mod tests {
         config.confirm_upload = false;
         config.notify_mentions_only = false;
         config.sound_notifications = false;
+        config.message_bubbles = true;
 
         let mut prefs = Preferences::from_config(&config);
         assert_eq!(prefs.theme, "tux");
@@ -584,6 +602,7 @@ mod tests {
         assert!(!prefs.confirm_upload);
         assert!(!prefs.notify_mentions_only);
         assert!(!prefs.sound_notifications);
+        assert!(prefs.message_bubbles);
 
         prefs.toast_seconds = 99;
         prefs.apply_to(&mut config);

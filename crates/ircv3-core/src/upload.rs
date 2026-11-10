@@ -40,6 +40,7 @@ pub fn upload_file(path: &Path) -> Result<String, String> {
             format!("lecture impossible : {error}")
         }
     })?;
+    let bytes = sanitize_image(bytes)?;
     let part = reqwest::blocking::multipart::Part::bytes(bytes).file_name(filename.clone());
     let form = reqwest::blocking::multipart::Form::new()
         .text("reqtype", "fileupload")
@@ -79,6 +80,103 @@ pub fn upload_file(path: &Path) -> Result<String, String> {
     Ok(text)
 }
 
+/// Retire les métadonnées des images JPEG et PNG avant un upload public.
+///
+/// Les autres formats sont renvoyés tels quels. En cas d'erreur sur un format
+/// reconnu, l'upload est refusé plutôt que de risquer de publier des données
+/// EXIF/XMP (GPS, appareil, logiciel, commentaires…).
+fn sanitize_image(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
+    if bytes.starts_with(&[0xff, 0xd8]) {
+        return strip_jpeg_metadata(&bytes).ok_or_else(|| {
+            t(
+                "Impossible de retirer les métadonnées de cette image JPEG.",
+                "Could not remove metadata from this JPEG image.",
+            )
+            .to_string()
+        });
+    }
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return strip_png_metadata(&bytes).ok_or_else(|| {
+            t(
+                "Impossible de retirer les métadonnées de cette image PNG.",
+                "Could not remove metadata from this PNG image.",
+            )
+            .to_string()
+        });
+    }
+    Ok(bytes)
+}
+
+fn strip_jpeg_metadata(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut output = Vec::with_capacity(bytes.len());
+    output.extend_from_slice(&bytes[..2]);
+    let mut index = 2;
+    while index + 1 < bytes.len() {
+        if bytes[index] != 0xff {
+            return None;
+        }
+        let marker = bytes[index + 1];
+        if marker == 0xd9 {
+            output.extend_from_slice(&bytes[index..]);
+            return Some(output);
+        }
+        if marker == 0xda {
+            // Début des données compressées : on conserve toute la fin.
+            output.extend_from_slice(&bytes[index..]);
+            return Some(output);
+        }
+        if marker == 0x01 || (0xd0..=0xd7).contains(&marker) {
+            output.extend_from_slice(&bytes[index..index + 2]);
+            index += 2;
+            continue;
+        }
+        if index + 4 > bytes.len() {
+            return None;
+        }
+        let length = u16::from_be_bytes([bytes[index + 2], bytes[index + 3]]) as usize;
+        if length < 2 || index + 2 + length > bytes.len() {
+            return None;
+        }
+        let segment = &bytes[index..index + 2 + length];
+        let is_metadata = marker == 0xe1 // EXIF / XMP
+            || marker == 0xed // IPTC / Photoshop
+            || marker == 0xfe; // commentaire
+        if !is_metadata {
+            output.extend_from_slice(segment);
+        }
+        index += 2 + length;
+    }
+    None
+}
+
+fn strip_png_metadata(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut output = Vec::with_capacity(bytes.len());
+    output.extend_from_slice(&bytes[..8]);
+    let mut index = 8;
+    while index + 12 <= bytes.len() {
+        let length = u32::from_be_bytes([
+            bytes[index],
+            bytes[index + 1],
+            bytes[index + 2],
+            bytes[index + 3],
+        ]) as usize;
+        let end = index.checked_add(12)?.checked_add(length)?;
+        if end > bytes.len() {
+            return None;
+        }
+        let kind = &bytes[index + 4..index + 8];
+        let is_metadata = matches!(kind, b"tEXt" | b"iTXt" | b"zTXt" | b"eXIf" | b"tIME");
+        if !is_metadata {
+            output.extend_from_slice(&bytes[index..end]);
+        }
+        index = end;
+        if kind == b"IEND" {
+            return Some(output);
+        }
+    }
+    None
+}
+
 pub fn format_size(bytes: u64) -> String {
     const KIB: f64 = 1024.0;
     const MIB: f64 = KIB * 1024.0;
@@ -109,5 +207,46 @@ mod tests {
         assert_eq!(format_size(512), "512 o");
         assert_eq!(format_size(1536), "1.5 Ko");
         assert_eq!(format_size(2 * 1024 * 1024), "2.0 Mo");
+    }
+
+    #[test]
+    fn strips_jpeg_metadata() {
+        let bytes = vec![
+            0xff, 0xd8, // SOI
+            0xff, 0xe0, 0x00, 0x04, 0x00, 0x00, // APP0
+            0xff, 0xe1, 0x00, 0x06, b'E', b'X', b'I', b'F', // APP1
+            0xff, 0xda, 0x00, 0x02, // SOS
+            0xff, 0xd9, // EOI
+        ];
+        let stripped = sanitize_image(bytes).unwrap();
+        assert!(stripped.windows(2).any(|window| window == [0xff, 0xe0]));
+        assert!(!stripped.windows(2).any(|window| window == [0xff, 0xe1]));
+        assert!(stripped.ends_with(&[0xff, 0xd9]));
+    }
+
+    #[test]
+    fn strips_png_text_chunks() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+        bytes.extend_from_slice(&13u32.to_be_bytes());
+        bytes.extend_from_slice(b"IHDR");
+        bytes.extend_from_slice(&[0u8; 13]);
+        bytes.extend_from_slice(&[0u8; 4]);
+        bytes.extend_from_slice(&4u32.to_be_bytes());
+        bytes.extend_from_slice(b"tEXt");
+        bytes.extend_from_slice(b"test");
+        bytes.extend_from_slice(&[0u8; 4]);
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        bytes.extend_from_slice(b"IDAT");
+        bytes.extend_from_slice(&[0u8; 4]);
+        bytes.extend_from_slice(&0u32.to_be_bytes());
+        bytes.extend_from_slice(b"IEND");
+        bytes.extend_from_slice(&[0u8; 4]);
+
+        let stripped = sanitize_image(bytes).unwrap();
+        assert!(!stripped.windows(4).any(|window| window == b"tEXt"));
+        assert!(stripped.windows(4).any(|window| window == b"IHDR"));
+        assert!(stripped.windows(4).any(|window| window == b"IDAT"));
+        assert!(stripped.windows(4).any(|window| window == b"IEND"));
     }
 }
