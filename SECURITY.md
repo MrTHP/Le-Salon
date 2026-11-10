@@ -3,7 +3,7 @@
 ## Versions prises en charge
 
 Les correctifs de sécurité sont appliqués à la dernière version publiée
-(actuellement **1.7.1**) et à la branche `main`.
+(actuellement **1.8.0**) et à la branche `main`.
 
 ## Ce que Le Salon garantit par défaut
 
@@ -84,7 +84,7 @@ Les AppImage sont construites par la CI GitHub à partir du tag correspondant.
 Compare le SHA-256 publié dans la note de release avec le fichier téléchargé :
 
 ```bash
-sha256sum Le-Salon-1.7.1-x86_64.AppImage
+sha256sum Le-Salon-1.8.0-x86_64.AppImage
 ```
 
 Ne télécharge les binaires que depuis la page officielle des releases.

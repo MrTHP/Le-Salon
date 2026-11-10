@@ -6,7 +6,7 @@
 [![GPUI](https://img.shields.io/badge/UI-GPUI-blue)](https://gpui.rs/)
 [![Linux](https://img.shields.io/badge/Linux-AppImage-success?logo=linux)](https://appimage.org/)
 [![macOS](https://img.shields.io/badge/macOS-universal-lightgrey?logo=apple)](https://www.apple.com/macos/)
-[![Version](https://img.shields.io/badge/version-1.7.1-informational)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-1.8.0-informational)](Cargo.toml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#licence)
 
 **🇫🇷 [Français](#français) · 🇬🇧 [English](#english) · 🌐 [Site web](https://mrthp.github.io/Le-Salon/)**
@@ -148,15 +148,15 @@ Les binaires officiels sont publiés dans les
 Linux peut aussi être produite localement, à la racine de l’application :
 
 ```sh
-chmod +x Le-Salon-1.7.1-x86_64.AppImage
-./Le-Salon-1.7.1-x86_64.AppImage
+chmod +x Le-Salon-1.8.0-x86_64.AppImage
+./Le-Salon-1.8.0-x86_64.AppImage
 ```
 
 Si Wayland pose problème, l’AppRun retente automatiquement sous XWayland.
 Pour forcer X11 :
 
 ```sh
-LE_SALON_X11=1 ./Le-Salon-1.7.1-x86_64.AppImage
+LE_SALON_X11=1 ./Le-Salon-1.8.0-x86_64.AppImage
 ```
 
 L’AppImage embarque le binaire et les bibliothèques X11/xkb ; Vulkan, Wayland,
@@ -194,7 +194,7 @@ sudo apt install build-essential pkg-config \
 
 ```sh
 sh tools/build-appimage-le-salon.sh
-# → Le-Salon-1.7.1-x86_64.AppImage
+# → Le-Salon-1.8.0-x86_64.AppImage
 ```
 
 #### macOS
@@ -206,12 +206,12 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin
 sh tools/build-macos-app.sh
 ```
 
-Le script produit `Le-Salon-1.7.1-macos-universal.zip` (arm64 + Intel) avec
+Le script produit `Le-Salon-1.8.0-macos-universal.zip` (arm64 + Intel) avec
 une signature ad-hoc. macOS bloque les applications non notariées au premier
 lancement :
 
 ```sh
-unzip Le-Salon-1.7.1-macos-universal.zip
+unzip Le-Salon-1.8.0-macos-universal.zip
 xattr -dr com.apple.quarantine "Le Salon.app"
 open "Le Salon.app"
 ```
@@ -474,15 +474,15 @@ Official binaries are published in the
 AppImage can also be produced locally at the application root:
 
 ```sh
-chmod +x Le-Salon-1.7.1-x86_64.AppImage
-./Le-Salon-1.7.1-x86_64.AppImage
+chmod +x Le-Salon-1.8.0-x86_64.AppImage
+./Le-Salon-1.8.0-x86_64.AppImage
 ```
 
 If Wayland causes trouble, AppRun automatically retries under XWayland. To
 force X11:
 
 ```sh
-LE_SALON_X11=1 ./Le-Salon-1.7.1-x86_64.AppImage
+LE_SALON_X11=1 ./Le-Salon-1.8.0-x86_64.AppImage
 ```
 
 The AppImage bundles the binary and the X11/xkb libraries; Vulkan, Wayland,
@@ -520,7 +520,7 @@ sudo apt install build-essential pkg-config \
 
 ```sh
 sh tools/build-appimage-le-salon.sh
-# → Le-Salon-1.7.1-x86_64.AppImage
+# → Le-Salon-1.8.0-x86_64.AppImage
 ```
 
 #### macOS
@@ -532,11 +532,11 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin
 sh tools/build-macos-app.sh
 ```
 
-The script produces `Le-Salon-1.7.1-macos-universal.zip` (arm64 + Intel)
+The script produces `Le-Salon-1.8.0-macos-universal.zip` (arm64 + Intel)
 with an ad-hoc signature. macOS blocks non-notarized apps on first launch:
 
 ```sh
-unzip Le-Salon-1.7.1-macos-universal.zip
+unzip Le-Salon-1.8.0-macos-universal.zip
 xattr -dr com.apple.quarantine "Le Salon.app"
 open "Le Salon.app"
 ```
