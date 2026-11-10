@@ -15,10 +15,12 @@ use std::{
 };
 
 use chrono::{DateTime, Local};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     config::{Config, ConnectionConfig},
     formatting::{self, FormatSpan},
+    history::HistoryStore,
     irc_fold,
 };
 
@@ -52,7 +54,8 @@ impl ConnectionStatus {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum BufferKind {
     #[default]
     Server,
@@ -70,7 +73,8 @@ impl BufferKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LineKind {
     #[default]
     Message,
@@ -99,10 +103,18 @@ pub struct ChatLine {
     pub at: DateTime<Local>,
     pub kind: LineKind,
     pub nick: Option<String>,
+    /// Texte brut tel qu'il a été reçu ou envoyé, avant analyse du formatage.
+    pub raw: String,
     pub text: String,
     pub spans: Vec<FormatSpan>,
     pub self_nick: bool,
     pub mention: bool,
+    /// Identifiant IRCv3 (`msgid`) permettant les réponses et réactions.
+    pub msgid: Option<String>,
+    /// Identifiant du message auquel celui-ci répond (`+draft/reply`).
+    pub reply_to: Option<String>,
+    /// Réactions : emoji → pseudos.
+    pub reactions: BTreeMap<String, Vec<String>>,
 }
 
 impl ChatLine {
@@ -113,16 +125,51 @@ impl ChatLine {
             at: Local::now(),
             kind,
             nick,
+            raw,
             text: formatted.text,
             spans: formatted.spans,
             self_nick: false,
             mention: false,
+            msgid: None,
+            reply_to: None,
+            reactions: BTreeMap::new(),
         }
     }
 
     pub fn with_time(mut self, at: DateTime<Local>) -> Self {
         self.at = at;
         self
+    }
+
+    pub fn with_msgid(mut self, msgid: Option<String>) -> Self {
+        self.msgid = msgid;
+        self
+    }
+
+    pub fn with_reply_to(mut self, reply_to: Option<String>) -> Self {
+        self.reply_to = reply_to;
+        self
+    }
+
+    pub fn add_reaction(&mut self, emoji: &str, nick: &str) {
+        let entry = self.reactions.entry(emoji.to_string()).or_default();
+        if !entry
+            .iter()
+            .any(|existing| irc_fold(existing) == irc_fold(nick))
+        {
+            entry.push(nick.to_string());
+            entry.sort_by_key(|value| irc_fold(value));
+        }
+    }
+
+    pub fn remove_reaction(&mut self, emoji: &str, nick: &str) {
+        let Some(entry) = self.reactions.get_mut(emoji) else {
+            return;
+        };
+        entry.retain(|existing| irc_fold(existing) != irc_fold(nick));
+        if entry.is_empty() {
+            self.reactions.remove(emoji);
+        }
     }
 
     pub fn is_plain(&self) -> bool {
@@ -532,6 +579,9 @@ pub struct AppModel {
     pub dcc: Vec<DccTransfer>,
     pub channel_lists: HashMap<NetworkId, ChannelListState>,
     pub version: u64,
+    /// Stockage local de l'historique. Désactivé dans les tests et les
+    /// utilisations embarquées qui ne doivent rien écrire sur le disque.
+    pub history: Option<HistoryStore>,
 }
 
 impl AppModel {
@@ -546,7 +596,12 @@ impl AppModel {
             dcc: Vec::new(),
             channel_lists: HashMap::new(),
             version: 0,
+            history: None,
         }
+    }
+
+    pub fn enable_history(&mut self, history: HistoryStore) {
+        self.history = Some(history);
     }
 
     pub fn alloc_id(&mut self) -> u64 {
@@ -627,6 +682,11 @@ impl AppModel {
         self.networks.iter_mut().find(|network| network.id == id)
     }
 
+    pub fn network_history_key(&self, network_id: NetworkId) -> Option<String> {
+        self.network(network_id)
+            .map(|network| format!("{}:{}", network.host, network.port))
+    }
+
     pub fn buffer(&self, id: BufferId) -> Option<&Buffer> {
         self.buffers.get(&id)
     }
@@ -676,6 +736,19 @@ impl AppModel {
         let id = self.alloc_id();
         let mut buffer = Buffer::new(id, network_id, kind, name);
         buffer.joined = matches!(kind, BufferKind::Server | BufferKind::Query);
+        if kind != BufferKind::Server
+            && let (Some(history), Some(network)) = (&self.history, self.network(network_id))
+        {
+            let key = format!("{}:{}", network.host, network.port);
+            let mut lines = history.load_buffer(&key, kind, name);
+            if !lines.is_empty() {
+                buffer.messages.extend(lines.drain(..));
+                buffer.version = buffer.version.wrapping_add(1);
+                if let Some(last) = buffer.messages.back() {
+                    buffer.last_activity = last.at;
+                }
+            }
+        }
         self.buffers.insert(id, buffer);
         if let Some(network) = self.network_mut(network_id) {
             network.buffers.push(id);
@@ -706,6 +779,22 @@ impl AppModel {
     pub fn append_line(&mut self, buffer_id: BufferId, line: ChatLine) {
         let active = self.active == Some(buffer_id);
         let mention = line.mention && !line.self_nick;
+        let persist = self.history.as_ref().and_then(|history| {
+            let buffer = self.buffers.get(&buffer_id)?;
+            if buffer.kind == BufferKind::Server {
+                return None;
+            }
+            let network = self.network(buffer.network)?;
+            Some(history.append(
+                &format!("{}:{}", network.host, network.port),
+                buffer.kind,
+                &buffer.name,
+                &line,
+            ))
+        });
+        if let Some(Err(error)) = persist {
+            log::warn!("écriture de l'historique impossible : {error}");
+        }
         if let Some(buffer) = self.buffer_mut(buffer_id) {
             if !active && buffer.kind != BufferKind::Server {
                 buffer.unread = buffer.unread.saturating_add(1);
@@ -716,7 +805,72 @@ impl AppModel {
         }
     }
 
+    pub fn apply_reaction(
+        &mut self,
+        buffer_id: BufferId,
+        msgid: &str,
+        emoji: &str,
+        nick: &str,
+        add: bool,
+    ) -> bool {
+        let mut updated = false;
+        let mut snapshot = None;
+        if let Some(buffer) = self.buffers.get_mut(&buffer_id) {
+            if let Some(line) = buffer
+                .messages
+                .iter_mut()
+                .rev()
+                .find(|line| line.msgid.as_deref() == Some(msgid))
+            {
+                if add {
+                    line.add_reaction(emoji, nick);
+                } else {
+                    line.remove_reaction(emoji, nick);
+                }
+                updated = true;
+            }
+            if updated {
+                snapshot = Some((
+                    buffer.kind,
+                    buffer.name.clone(),
+                    buffer.messages.iter().cloned().collect::<Vec<_>>(),
+                ));
+            }
+        }
+        if updated
+            && let Some((kind, name, lines)) = snapshot
+            && let Some(history) = &self.history
+            && let Some(network) = self
+                .buffers
+                .get(&buffer_id)
+                .and_then(|buffer| self.network(buffer.network))
+            && let Err(error) = history.rewrite(
+                &format!("{}:{}", network.host, network.port),
+                kind,
+                &name,
+                &lines,
+            )
+        {
+            log::warn!("sauvegarde des réactions impossible : {error}");
+        }
+        if updated {
+            self.touch();
+        }
+        updated
+    }
+
     pub fn clear_buffer(&mut self, buffer_id: BufferId) {
+        if let Some(history) = &self.history
+            && let Some(buffer) = self.buffers.get(&buffer_id)
+            && let Some(network) = self.network(buffer.network)
+            && let Err(error) = history.clear_buffer(
+                &format!("{}:{}", network.host, network.port),
+                buffer.kind,
+                &buffer.name,
+            )
+        {
+            log::warn!("suppression de l'historique impossible : {error}");
+        }
         if let Some(buffer) = self.buffer_mut(buffer_id) {
             buffer.clear_messages();
             self.touch();

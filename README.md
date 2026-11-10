@@ -72,6 +72,14 @@ navigateur embarqué.
 * journal coloré, pseudos colorés, repli automatique du texte, historique par
   onglet et formatage mIRC (gras, italique, souligné, barré, monospace,
   couleurs 16/256 et hexadécimales) ;
+* **historique local persistant** et recherche globale (`Ctrl+Shift+F`) avec
+  retour au message exact ;
+* **brouillons récupérables** après redémarrage, **réponses** (`+draft/reply`)
+  et **réactions emoji** (`+draft/react`) compatibles IRCv3 ;
+* **messages sauvegardés** avec note et libellé, **activité récente** et
+  **palette de commandes** (`Ctrl+K`) ;
+* **notifications par tampon** (`/mute`), **heures calmes** (`/quiet 22:00
+  08:00`) et sons de notification configurables ;
 * liste des pseudos avec préfixes `~&@%+`, états absents et comptes ;
 * sujet, modes, population, état TLS, latence et capacités ;
 * **pseudo cliquable** dans la barre de saisie : un clic ouvre la fenêtre
@@ -228,7 +236,7 @@ Options : `--server`, `--port`, `--nick`, `--channel`, `--tls`/`--no-tls`,
 `/topic` `/names` `/whois` `/who` `/whowas` `/list` `/mode` `/op` `/deop`
 `/voice` `/devoice` `/kick` `/ban` `/unban` `/invite` `/away` `/back`
 `/monitor` `/raw` `/setname` `/ping` `/oper` `/wallops` `/clear` `/close`
-`/reconnect` `/disconnect` `/quit` `/help`.
+`/reply` `/react` `/unreact` `/reconnect` `/disconnect` `/quit` `/help`.
 
 Fonctions locales :
 
@@ -241,6 +249,11 @@ Fonctions locales :
 | `/dcc send pseudo fichier` | envoie un fichier en direct |
 | `/dcc cancel` | annule les transferts DCC |
 | `/list [filtre]` | ouvre la fenêtre de recherche des salons |
+| `/reply identifiant texte` | répond à un message IRCv3 |
+| `/react identifiant emoji` | ajoute une réaction emoji |
+| `/mute` | coupe les notifications du tampon actif |
+| `/quiet 22:00 08:00` | définit les heures calmes |
+| `/sound on\|off` | active ou coupe les sons |
 
 ### Raccourcis
 
@@ -248,6 +261,9 @@ Fonctions locales :
 |---|---|
 | `Ctrl+T` (`Cmd+T` sur macOS) | thèmes |
 | `Ctrl+P` | préférences |
+| `Ctrl+K` | palette de commandes |
+| `Ctrl+Shift+F` | recherche dans l’historique |
+| `Ctrl+Shift+S` | messages sauvegardés |
 | `Ctrl+E` | emojis |
 | `Ctrl+N` | nouveau réseau |
 | `Ctrl+F` | focus sur la saisie |
@@ -371,6 +387,14 @@ framework: GPU rendering, fast startup, no Electron and no embedded browser.
 * colored log, colored nicknames, text wrapping, per-tab history and mIRC
   formatting (bold, italic, underline, strikethrough, monospace, 16/256 and
   hex colors);
+* **persistent local history** and global search (`Ctrl+Shift+F`) with jump to
+  the exact message;
+* **recoverable drafts** after restart, IRCv3 **replies** (`+draft/reply`) and
+  **emoji reactions** (`+draft/react`);
+* **saved messages** with a note and label, **recent activity** and a
+  **command palette** (`Ctrl+K`);
+* **per-buffer notifications** (`/mute`), **quiet hours** (`/quiet 22:00
+  08:00`) and configurable notification sounds;
 * nickname list with `~&@%+` prefixes, away state and accounts;
 * topic, modes, user count, TLS state, latency and capabilities;
 * **clickable nickname** in the input bar: opens a “Change nickname” dialog
@@ -521,7 +545,7 @@ Options: `--server`, `--port`, `--nick`, `--channel`, `--tls`/`--no-tls`,
 `/topic` `/names` `/whois` `/who` `/whowas` `/list` `/mode` `/op` `/deop`
 `/voice` `/devoice` `/kick` `/ban` `/unban` `/invite` `/away` `/back`
 `/monitor` `/raw` `/setname` `/ping` `/oper` `/wallops` `/clear` `/close`
-`/reconnect` `/disconnect` `/quit` `/help`.
+`/reply` `/react` `/unreact` `/reconnect` `/disconnect` `/quit` `/help`.
 
 Local commands:
 
@@ -534,6 +558,11 @@ Local commands:
 | `/dcc send nick file` | send a file directly |
 | `/dcc cancel` | cancel DCC transfers |
 | `/list [filter]` | open the channel search window |
+| `/reply id text` | reply to an IRCv3 message |
+| `/react id emoji` | add an emoji reaction |
+| `/mute` | mute notifications for the active buffer |
+| `/quiet 22:00 08:00` | set quiet hours |
+| `/sound on\|off` | enable or disable sounds |
 
 ### Shortcuts
 
@@ -541,6 +570,9 @@ Local commands:
 |---|---|
 | `Ctrl+T` (`Cmd+T` on macOS) | themes |
 | `Ctrl+P` | preferences |
+| `Ctrl+K` | command palette |
+| `Ctrl+Shift+F` | search history |
+| `Ctrl+Shift+S` | saved messages |
 | `Ctrl+E` | emojis |
 | `Ctrl+N` | new network |
 | `Ctrl+F` | focus input |

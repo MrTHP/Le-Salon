@@ -49,6 +49,13 @@ pub struct Config {
     pub confirm_upload: bool,
     /// Ne notifier que les mentions et messages privés.
     pub notify_mentions_only: bool,
+    /// Jouer un son lors d'une notification.
+    pub sound_notifications: bool,
+    /// Début et fin des heures calmes au format HH:MM (vides = désactivé).
+    pub quiet_hours_start: String,
+    pub quiet_hours_end: String,
+    /// Clés des tampons dont les notifications sont coupées.
+    pub muted_buffers: Vec<String>,
     pub sidebar_width: f32,
     pub nick_width: f32,
 }
@@ -76,6 +83,10 @@ impl Default for Config {
             toast_seconds: 3,
             confirm_upload: true,
             notify_mentions_only: true,
+            sound_notifications: true,
+            quiet_hours_start: String::new(),
+            quiet_hours_end: String::new(),
+            muted_buffers: Vec::new(),
             sidebar_width: 236.0,
             nick_width: 168.0,
         }
@@ -112,6 +123,10 @@ impl fmt::Debug for Config {
             .field("toast_seconds", &self.toast_seconds)
             .field("confirm_upload", &self.confirm_upload)
             .field("notify_mentions_only", &self.notify_mentions_only)
+            .field("sound_notifications", &self.sound_notifications)
+            .field("quiet_hours_start", &self.quiet_hours_start)
+            .field("quiet_hours_end", &self.quiet_hours_end)
+            .field("muted_buffers", &self.muted_buffers.len())
             .field("sidebar_width", &self.sidebar_width)
             .field("nick_width", &self.nick_width)
             .finish()

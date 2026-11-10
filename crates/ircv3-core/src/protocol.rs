@@ -337,6 +337,24 @@ impl Session {
         self_nick: bool,
         at: Option<chrono::DateTime<Local>>,
     ) {
+        self.append_meta(
+            buffer_id, kind, nick, text, mention, self_nick, at, None, None,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn append_meta(
+        &self,
+        buffer_id: BufferId,
+        kind: LineKind,
+        nick: Option<String>,
+        text: impl Into<String>,
+        mention: bool,
+        self_nick: bool,
+        at: Option<chrono::DateTime<Local>>,
+        msgid: Option<String>,
+        reply_to: Option<String>,
+    ) {
         if buffer_id == 0 {
             return;
         }
@@ -346,6 +364,8 @@ impl Session {
         }
         line.mention = mention;
         line.self_nick = self_nick;
+        line.msgid = msgid;
+        line.reply_to = reply_to;
         self.with_model(|model| model.append_line(buffer_id, line));
         self.wake();
     }
@@ -1499,7 +1519,12 @@ impl Session {
         }
         let mention = !self_nick && mentions(&text, &self.nick);
         let kind = self.line_kind(msg, kind);
-        self.append(
+        let msgid = msg.tag("msgid").map(str::to_string);
+        let reply_to = msg
+            .tag("+draft/reply")
+            .or_else(|| msg.tag("reply"))
+            .map(str::to_string);
+        self.append_meta(
             buffer,
             kind,
             Some(from),
@@ -1507,6 +1532,8 @@ impl Session {
             mention,
             self_nick,
             msg.server_time(),
+            msgid,
+            reply_to,
         );
         Vec::new()
     }
@@ -1561,14 +1588,41 @@ impl Session {
         let Some(from) = msg.nick().map(str::to_string) else {
             return Vec::new();
         };
+        if target.is_empty() {
+            return Vec::new();
+        }
+        let self_nick = irc_fold(&from) == irc_fold(&self.nick);
+        let buffer = self.conversation_buffer(&from, &target, self_nick);
+
+        let reaction = msg
+            .tag("+draft/react")
+            .or_else(|| msg.tag("react"))
+            .map(|emoji| (emoji, true))
+            .or_else(|| {
+                msg.tag("+draft/unreact")
+                    .or_else(|| msg.tag("unreact"))
+                    .map(|emoji| (emoji, false))
+            });
+        if let Some((emoji, add)) = reaction {
+            let msgid = msg
+                .tag("+draft/reply")
+                .or_else(|| msg.tag("reply"))
+                .or_else(|| msg.tag("msgid"));
+            if let Some(msgid) = msgid {
+                self.with_model(|model| {
+                    model.apply_reaction(buffer, msgid, emoji, &from, add);
+                });
+                self.wake();
+            }
+            return Vec::new();
+        }
+
         let Some(typing) = msg.tag("+typing") else {
             return Vec::new();
         };
-        let self_nick = irc_fold(&from) == irc_fold(&self.nick);
         if self_nick {
             return Vec::new();
         }
-        let buffer = self.conversation_buffer(&from, &target, self_nick);
         self.with_model(|model| {
             if let Some(buffer) = model.buffer_mut(buffer) {
                 if typing == "active" {
@@ -1989,6 +2043,19 @@ impl Session {
     }
 
     fn local_echo(&self, target: &str, kind: LineKind, text: &str, force: bool) {
+        self.local_echo_meta(target, kind, text, force, None, None);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn local_echo_meta(
+        &self,
+        target: &str,
+        kind: LineKind,
+        text: &str,
+        force: bool,
+        msgid: Option<String>,
+        reply_to: Option<String>,
+    ) {
         if !force && self.echo_message() {
             return;
         }
@@ -1997,15 +2064,12 @@ impl Session {
         } else {
             self.query_buffer(target)
         };
-        self.append(
-            buffer,
-            kind,
-            Some(self.nick.clone()),
-            text,
-            false,
-            true,
-            None,
-        );
+        let mut line = ChatLine::new(kind, Some(self.nick.clone()), text);
+        line.self_nick = true;
+        line.msgid = msgid;
+        line.reply_to = reply_to;
+        self.with_model(|model| model.append_line(buffer, line));
+        self.wake();
     }
 
     pub fn handle_user_input(&mut self, input: &str) -> UserOutcome {
@@ -2086,6 +2150,36 @@ impl Session {
                         self.local_echo(&target, LineKind::Message, &text, false);
                     }
                 }
+            }
+            ParsedCommand::Reply {
+                target,
+                msgid,
+                text,
+            } => {
+                outcome
+                    .lines
+                    .push(format!("@+draft/reply={msgid} PRIVMSG {target} :{text}"));
+                self.local_echo_meta(&target, LineKind::Message, &text, false, None, Some(msgid));
+            }
+            ParsedCommand::React {
+                target,
+                msgid,
+                emoji,
+                remove,
+            } => {
+                let tag = if remove {
+                    "+draft/unreact"
+                } else {
+                    "+draft/react"
+                };
+                outcome.lines.push(format!(
+                    "@{tag}={emoji};+draft/reply={msgid} TAGMSG {target}"
+                ));
+                let buffer = self.conversation_buffer(&self.nick, &target, true);
+                self.with_model(|model| {
+                    model.apply_reaction(buffer, &msgid, &emoji, &self.nick, !remove);
+                });
+                self.wake();
             }
             ParsedCommand::Topic { channel, text } => {
                 let channel = channel.or_else(|| {
@@ -2703,6 +2797,50 @@ mod tests {
             .find_buffer(network.id, BufferKind::Query, "alice")
             .expect("query buffer for alice");
         assert_eq!(model.buffer(alice).unwrap().messages.len(), 2);
+    }
+
+    #[test]
+    fn reply_and_reaction_are_sent_and_applied() {
+        let (mut session, model) = session();
+        session.on_line(":moi!m@h JOIN #test");
+
+        let outcome = session.handle_user_input("/reply msg-1 bonjour");
+        assert_eq!(
+            outcome.lines,
+            vec!["@+draft/reply=msg-1 PRIVMSG #test :bonjour"]
+        );
+        {
+            let model = model.lock().unwrap();
+            let network = model.active_network().unwrap();
+            let channel = model
+                .find_buffer(network.id, BufferKind::Channel, "#test")
+                .unwrap();
+            let line = model.buffer(channel).unwrap().messages.back().unwrap();
+            assert_eq!(line.reply_to.as_deref(), Some("msg-1"));
+        }
+
+        session.on_line("@msgid=abc :alice!a@h PRIVMSG #test :hello");
+        let outcome = session.handle_user_input("/react abc 👍");
+        assert_eq!(
+            outcome.lines,
+            vec!["@+draft/react=👍;+draft/reply=abc TAGMSG #test"]
+        );
+        session.on_line("@+draft/react=🎉;+draft/reply=abc :bob!b@h TAGMSG #test");
+
+        let model = model.lock().unwrap();
+        let network = model.active_network().unwrap();
+        let channel = model
+            .find_buffer(network.id, BufferKind::Channel, "#test")
+            .unwrap();
+        let line = model
+            .buffer(channel)
+            .unwrap()
+            .messages
+            .iter()
+            .find(|line| line.msgid.as_deref() == Some("abc"))
+            .unwrap();
+        assert!(line.reactions["👍"].contains(&"moi".to_string()));
+        assert!(line.reactions["🎉"].contains(&"bob".to_string()));
     }
 
     #[test]

@@ -20,6 +20,7 @@ pub fn line_row(
     line: &ChatLine,
     font: &Font,
     users: &HashMap<String, User>,
+    replies: &HashMap<String, ChatLine>,
     index: usize,
 ) -> AnyElement {
     let color = theme::line_color(line.kind);
@@ -58,13 +59,7 @@ pub fn line_row(
             };
             let nick_text = format!("<{nick}>");
             row.child(nick_element(index, nick, nick_text, nick_color, users))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .text_color(color)
-                        .child(styled_text(line, font, color)),
-                )
+                .child(message_body(line, font, color, replies))
                 .into_any_element()
         }
         LineKind::Action => {
@@ -81,8 +76,7 @@ pub fn line_row(
                     .flex_1()
                     .min_w_0()
                     .italic()
-                    .text_color(color)
-                    .child(styled_text(line, font, color)),
+                    .child(message_body(line, font, color, replies)),
             )
             .into_any_element()
         }
@@ -95,13 +89,7 @@ pub fn line_row(
                 theme::nick_color(nick),
                 users,
             ))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_color(color)
-                    .child(styled_text(line, font, color)),
-            )
+            .child(message_body(line, font, color, replies))
             .into_any_element()
         }
         _ => {
@@ -152,6 +140,54 @@ fn nick_element(
         element = element.tooltip(move |_, cx| tooltip::user_card(cx, &user, false));
     }
     element.child(text).into_any_element()
+}
+
+fn message_body(
+    line: &ChatLine,
+    font: &Font,
+    color: Hsla,
+    replies: &HashMap<String, ChatLine>,
+) -> AnyElement {
+    let mut content = div().flex_1().min_w_0().flex().flex_col().gap_1();
+    if let Some(parent_id) = &line.reply_to {
+        let preview = replies
+            .get(parent_id)
+            .map(|parent| format!("{}: {}", parent.nick.as_deref().unwrap_or("?"), parent.text))
+            .unwrap_or_else(|| crate::i18n::t("message au-dessus", "earlier message").to_string());
+        let preview: String = preview.chars().take(140).collect();
+        content = content.child(
+            div()
+                .text_size(px(10.5))
+                .text_color(theme::muted())
+                .child(format!("↳ {preview}")),
+        );
+    }
+    content = content.child(
+        div()
+            .text_color(color)
+            .child(styled_text(line, font, color)),
+    );
+    if !line.reactions.is_empty() {
+        let reactions = line.reactions.iter().map(|(emoji, nicks)| {
+            let label = if nicks.len() > 1 {
+                format!("{emoji} {}", nicks.len())
+            } else {
+                emoji.clone()
+            };
+            div()
+                .px(px(5.))
+                .py(px(1.))
+                .rounded_sm()
+                .bg(theme::panel_alt())
+                .border_1()
+                .border_color(theme::border())
+                .text_size(px(11.))
+                .text_color(theme::text())
+                .child(label)
+        });
+        content = content.child(div().flex().gap_1().children(reactions));
+    }
+    content.into_any_element()
 }
 
 fn styled_text(line: &ChatLine, font: &Font, default_color: Hsla) -> AnyElement {

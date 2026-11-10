@@ -17,7 +17,7 @@ use gpui::{
 };
 
 use ircv3_core::{
-    APP_NAME, Config, ConnectionConfig, Lang,
+    APP_NAME, Config, ConnectionConfig, HistoryStore, Lang,
     client::{self, NetworkHandle},
     formatting, irc_fold, media,
     model::{
@@ -72,6 +72,9 @@ actions!(
         OpenThemes,
         OpenEmoji,
         OpenPreferences,
+        OpenSearch,
+        OpenSaved,
+        OpenPalette,
         TabNext,
         TabPrev,
         GoToBuffer1,
@@ -96,6 +99,9 @@ pub fn install_bindings(cx: &mut App) {
         KeyBinding::new("secondary-t", OpenThemes, None),
         KeyBinding::new("secondary-e", OpenEmoji, None),
         KeyBinding::new("secondary-p", OpenPreferences, None),
+        KeyBinding::new("secondary-shift-f", OpenSearch, None),
+        KeyBinding::new("secondary-shift-s", OpenSaved, None),
+        KeyBinding::new("secondary-k", OpenPalette, None),
         KeyBinding::new("tab", TabNext, Some("FormInput")),
         KeyBinding::new("shift-tab", TabPrev, Some("FormInput")),
         KeyBinding::new("alt-1", GoToBuffer1, None),
@@ -192,6 +198,20 @@ struct Toast {
     expires_at: Instant,
 }
 
+#[derive(Clone, Debug)]
+struct ReplyTarget {
+    msgid: String,
+    nick: String,
+    text: String,
+}
+
+#[derive(Clone, Debug)]
+enum PaletteAction {
+    Input(&'static str),
+    Buffer(BufferId),
+    Command(&'static str),
+}
+
 /// Nettoie le texte affiché dans une notification : retire les codes mIRC,
 /// les contrôles et les caractères de direction Unicode.
 fn clean_notification_text(text: &str) -> String {
@@ -265,6 +285,28 @@ pub struct AppRoot {
     nick_width: Pixels,
     resize_drag: Option<ResizeDrag>,
     quitting: bool,
+    draft_store: crate::drafts::DraftStore,
+    last_draft_flush: Instant,
+    reply_target: Option<ReplyTarget>,
+    search_open: bool,
+    search_input: Entity<TextInput>,
+    _search_sub: Option<Subscription>,
+    search_results: Vec<ircv3_core::SearchHit>,
+    focus_search: bool,
+    pending_scroll: Option<(BufferId, usize)>,
+    activity_open: bool,
+    palette_open: bool,
+    palette_input: Entity<TextInput>,
+    _palette_sub: Option<Subscription>,
+    focus_palette: bool,
+    saved_open: bool,
+    saved_messages: crate::saved::SavedStore,
+    saved_search: Entity<TextInput>,
+    _saved_sub: Option<Subscription>,
+    saved_edit_id: Option<u64>,
+    saved_note_input: Entity<TextInput>,
+    saved_label_input: Entity<TextInput>,
+    reaction_target: Option<(BufferId, String)>,
 }
 
 impl AppRoot {
@@ -280,6 +322,10 @@ impl AppRoot {
         let theme_index = theme::set_theme_key(&theme_key);
         config.theme = theme::themes()[theme_index].key.to_string();
         let model = Arc::new(Mutex::new(AppModel::new(config.clone())));
+        model
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .enable_history(HistoryStore::default());
         let (wake_tx, wake_rx) = async_channel::bounded(1);
         let input = cx.new(|cx| {
             TextInput::new(
@@ -330,6 +376,73 @@ impl AppRoot {
                     TextInputEvent::Submitted(text) => this.confirm_rename(text.clone(), cx),
                     TextInputEvent::Escape => {
                         this.rename_open = false;
+                        this.should_focus_input = true;
+                        cx.notify();
+                    }
+                    TextInputEvent::Changed(_) => cx.notify(),
+                    _ => {}
+                },
+            );
+        let search_input = cx.new(|cx| {
+            TextInput::new(
+                cx,
+                i18n::t("Rechercher dans les messages…", "Search messages…"),
+                "",
+                false,
+            )
+        });
+        let search_sub =
+            cx.subscribe(
+                &search_input,
+                |this, _, event: &TextInputEvent, cx| match event {
+                    TextInputEvent::Changed(_) => this.update_search(cx),
+                    TextInputEvent::Submitted(_) => this.open_selected_search_result(cx),
+                    TextInputEvent::Escape => {
+                        this.search_open = false;
+                        this.should_focus_input = true;
+                        cx.notify();
+                    }
+                    _ => {}
+                },
+            );
+        let saved_search = cx.new(|cx| {
+            TextInput::new(
+                cx,
+                i18n::t(
+                    "Filtrer les messages sauvegardés…",
+                    "Filter saved messages…",
+                ),
+                "",
+                false,
+            )
+        });
+        let saved_sub = cx.subscribe(&saved_search, |_this, _, event: &TextInputEvent, cx| {
+            if matches!(event, TextInputEvent::Changed(_)) {
+                cx.notify();
+            }
+        });
+        let saved_note_input =
+            cx.new(|cx| TextInput::new(cx, i18n::t("Note privée", "Private note"), "", false));
+        let saved_label_input =
+            cx.new(|cx| TextInput::new(cx, i18n::t("Libellé", "Label"), "", false));
+        let palette_input = cx.new(|cx| {
+            TextInput::new(
+                cx,
+                i18n::t(
+                    "Commande, salon ou réglage…",
+                    "Command, channel or setting…",
+                ),
+                "",
+                false,
+            )
+        });
+        let palette_sub =
+            cx.subscribe(
+                &palette_input,
+                |this, _, event: &TextInputEvent, cx| match event {
+                    TextInputEvent::Submitted(text) => this.run_palette(text.clone(), cx),
+                    TextInputEvent::Escape => {
+                        this.palette_open = false;
                         this.should_focus_input = true;
                         cx.notify();
                     }
@@ -394,6 +507,28 @@ impl AppRoot {
             nick_width,
             resize_drag: None,
             quitting: false,
+            draft_store: crate::drafts::DraftStore::load(),
+            last_draft_flush: Instant::now(),
+            reply_target: None,
+            search_open: false,
+            search_input,
+            _search_sub: Some(search_sub),
+            search_results: Vec::new(),
+            focus_search: false,
+            pending_scroll: None,
+            activity_open: false,
+            palette_open: false,
+            palette_input,
+            _palette_sub: Some(palette_sub),
+            focus_palette: false,
+            saved_open: false,
+            saved_messages: crate::saved::SavedStore::load(),
+            saved_search,
+            _saved_sub: Some(saved_sub),
+            saved_edit_id: None,
+            saved_note_input,
+            saved_label_input,
+            reaction_target: None,
         };
         root.start_tasks(cx);
         // Commutateurs de diagnostic pour les captures d'écran.
@@ -469,6 +604,10 @@ impl AppRoot {
                         this.check_notifications(cx);
                         this.expire_toasts();
                         this.process_tray(cx);
+                        if this.last_draft_flush.elapsed() >= Duration::from_secs(5) {
+                            this.draft_store.flush();
+                            this.last_draft_flush = Instant::now();
+                        }
                         cx.notify();
                     })
                     .is_err()
@@ -502,7 +641,12 @@ impl AppRoot {
                 self.input.update(cx, |input, cx| input.clear(cx));
                 self.completion = None;
             }
-            TextInputEvent::Changed(text) => self.maybe_send_typing(text),
+            TextInputEvent::Changed(text) => {
+                if let Some(key) = self.active_draft_key() {
+                    self.draft_store.set(&key, text);
+                }
+                self.maybe_send_typing(text);
+            }
         }
     }
 
@@ -706,9 +850,17 @@ impl AppRoot {
         if text.is_empty() {
             return;
         }
+        let text = if text.starts_with('/') {
+            text
+        } else if let Some(reply) = self.reply_target.take() {
+            format!("/reply {} {text}", reply.msgid)
+        } else {
+            text
+        };
         if self.handle_special_command(&text, cx) {
             return;
         }
+        let draft_key = self.active_draft_key();
         let (network_id, buffer_id) = {
             let model = self.model.lock().unwrap_or_else(|e| e.into_inner());
             let active = model.active_buffer();
@@ -734,6 +886,10 @@ impl AppRoot {
         }
         if let Some(buffer_id) = buffer_id {
             self.drafts.remove(&buffer_id);
+        }
+        if let Some(key) = draft_key {
+            self.draft_store.remove(&key);
+            self.draft_store.flush();
         }
         self.last_typing = None;
         self.completion = None;
@@ -765,13 +921,20 @@ impl AppRoot {
         }
         if let Some(old) = self.last_active {
             let text = self.input.read(cx).content().to_string();
+            if let Some(key) = self.buffer_draft_key(old) {
+                self.draft_store.set(&key, &text);
+            }
             self.drafts.insert(old, text);
         }
         {
             let mut model = self.model.lock().unwrap_or_else(|e| e.into_inner());
             model.set_active(id);
         }
-        let draft = self.drafts.remove(&id).unwrap_or_default();
+        let persisted = self
+            .buffer_draft_key(id)
+            .and_then(|key| self.draft_store.get(&key));
+        let draft = self.drafts.remove(&id).or(persisted).unwrap_or_default();
+        self.reply_target = None;
         self.input.update(cx, |input, cx| input.set_text(draft, cx));
         self.last_active = Some(id);
         self.completion = None;
@@ -1566,6 +1729,23 @@ impl AppRoot {
         self.open_preferences(cx);
     }
 
+    fn open_search_action(&mut self, _: &OpenSearch, _: &mut Window, cx: &mut Context<Self>) {
+        self.open_search(cx);
+    }
+
+    fn open_saved_action(&mut self, _: &OpenSaved, _: &mut Window, cx: &mut Context<Self>) {
+        self.saved_open = true;
+        self.search_open = false;
+        self.activity_open = false;
+        self.should_focus_input = false;
+        self.popup = None;
+        cx.notify();
+    }
+
+    fn open_palette_action(&mut self, _: &OpenPalette, _: &mut Window, cx: &mut Context<Self>) {
+        self.open_palette(cx);
+    }
+
     fn tab_next(&mut self, _: &TabNext, window: &mut Window, _: &mut Context<Self>) {
         window.focus_next();
     }
@@ -2144,7 +2324,56 @@ impl AppRoot {
             .bg(theme::bg())
             .child(header)
             .child(body)
+            .when(self.reply_target.is_some(), |panel| {
+                let reply = self.reply_target.clone().unwrap_or(ReplyTarget {
+                    msgid: String::new(),
+                    nick: String::new(),
+                    text: String::new(),
+                });
+                panel.child(self.reply_banner(&reply, cx))
+            })
             .child(self.composer(&view, cx))
+    }
+
+    fn reply_banner(&self, reply: &ReplyTarget, cx: &Context<Self>) -> Div {
+        let preview: String = reply.text.chars().take(120).collect();
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .bg(theme::panel_alt())
+            .border_t_1()
+            .border_color(theme::border())
+            .text_size(px(11.))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(theme::muted())
+                    .child(format!("↳ {}: {preview}", reply.nick)),
+            )
+            .child(
+                div()
+                    .id("reply-cancel")
+                    .px_2()
+                    .py_1()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .text_color(theme::muted())
+                    .hover(|style| style.bg(theme::panel()))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            this.reply_target = None;
+                            cx.notify();
+                        }),
+                    )
+                    .child("✕"),
+            )
     }
 
     fn buffer_header(
@@ -2418,9 +2647,15 @@ impl AppRoot {
             .iter()
             .map(|user| (irc_fold(&user.nick), user.clone()))
             .collect();
+        let replies: HashMap<String, ChatLine> = view
+            .lines
+            .iter()
+            .filter_map(|line| line.msgid.clone().map(|msgid| (msgid, line.clone())))
+            .collect();
         let mut children: Vec<AnyElement> = Vec::new();
         let today = Local::now().date_naive();
         let mut last_date = None;
+        let mut pending_child = None;
         for (index, line) in view.lines.iter().enumerate() {
             let date = line.at.date_naive();
             if last_date != Some(date) {
@@ -2448,7 +2683,29 @@ impl AppRoot {
                 );
                 last_date = Some(date);
             }
-            children.push(chat::line_row(line, &font, &users, index));
+            if self.pending_scroll == Some((view.id, index)) {
+                pending_child = Some(children.len());
+                self.pending_scroll = None;
+            }
+            let buffer_id = view.id;
+            let line_for_menu = line.clone();
+            children.push(
+                div()
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            this.open_message_menu(
+                                buffer_id,
+                                line_for_menu.clone(),
+                                event.position,
+                                cx,
+                            );
+                        }),
+                    )
+                    .child(chat::line_row(line, &font, &users, &replies, index))
+                    .into_any_element(),
+            );
             if let Some(link) = media::find_media(&line.text) {
                 let url = link.url.clone();
                 let label = match link.kind {
@@ -2484,6 +2741,9 @@ impl AppRoot {
                         .into_any_element(),
                 );
             }
+        }
+        if let Some(index) = pending_child {
+            scroll.scroll_to_item(index);
         }
         if view.lines.is_empty() {
             children.push(
@@ -2991,6 +3251,452 @@ impl AppRoot {
         Some((buffer.network, buffer.id, buffer.kind, buffer.name.clone()))
     }
 
+    fn active_draft_key(&self) -> Option<String> {
+        let model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+        let buffer = model.active_buffer()?;
+        storage_key(&model, buffer)
+    }
+
+    fn buffer_draft_key(&self, buffer_id: BufferId) -> Option<String> {
+        let model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+        let buffer = model.buffer(buffer_id)?;
+        storage_key(&model, buffer)
+    }
+
+    fn buffer_storage_key(&self, buffer_id: BufferId) -> Option<String> {
+        self.buffer_draft_key(buffer_id)
+    }
+
+    fn is_buffer_muted(&self, buffer_id: BufferId) -> bool {
+        self.buffer_storage_key(buffer_id)
+            .is_some_and(|key| self.config.muted_buffers.contains(&key))
+    }
+
+    fn open_search(&mut self, cx: &mut Context<Self>) {
+        self.search_open = true;
+        self.saved_open = false;
+        self.activity_open = false;
+        self.palette_open = false;
+        self.focus_search = true;
+        self.search_input
+            .update(cx, |input, cx| input.set_text("", cx));
+        self.search_results.clear();
+        self.popup = None;
+        cx.notify();
+    }
+
+    fn open_palette(&mut self, cx: &mut Context<Self>) {
+        self.palette_open = true;
+        self.focus_palette = true;
+        self.palette_input
+            .update(cx, |input, cx| input.set_text("", cx));
+        self.popup = None;
+        cx.notify();
+    }
+
+    fn palette_items(&self) -> Vec<(String, PaletteAction)> {
+        let mut items: Vec<(String, PaletteAction)> = vec![
+            (
+                i18n::t("Préférences…", "Preferences…").to_string(),
+                PaletteAction::Command("preferences"),
+            ),
+            (
+                i18n::t("Thèmes…", "Themes…").to_string(),
+                PaletteAction::Command("themes"),
+            ),
+            (
+                i18n::t("Rechercher dans les messages…", "Search messages…").to_string(),
+                PaletteAction::Command("search"),
+            ),
+            (
+                i18n::t("Messages sauvegardés…", "Saved messages…").to_string(),
+                PaletteAction::Command("saved"),
+            ),
+            (
+                i18n::t("Activité récente…", "Recent activity…").to_string(),
+                PaletteAction::Command("activity"),
+            ),
+            (
+                i18n::t("Emojis…", "Emojis…").to_string(),
+                PaletteAction::Command("emoji"),
+            ),
+            (
+                i18n::t("Messages planifiés…", "Scheduled messages…").to_string(),
+                PaletteAction::Command("schedule"),
+            ),
+            (
+                i18n::t("Transferts DCC…", "DCC transfers…").to_string(),
+                PaletteAction::Command("dcc"),
+            ),
+            (
+                i18n::t("Liste des salons…", "Channel list…").to_string(),
+                PaletteAction::Command("list"),
+            ),
+            (
+                i18n::t("Notifications", "Notifications").to_string(),
+                PaletteAction::Command("notifications"),
+            ),
+            (
+                i18n::t("Reconnecter", "Reconnect").to_string(),
+                PaletteAction::Command("reconnect"),
+            ),
+            (
+                i18n::t("Déconnecter", "Disconnect").to_string(),
+                PaletteAction::Command("disconnect"),
+            ),
+            (
+                i18n::t("Nouveau réseau…", "New network…").to_string(),
+                PaletteAction::Command("newnetwork"),
+            ),
+            (
+                i18n::t("Appel Jitsi", "Jitsi call").to_string(),
+                PaletteAction::Command("jitsi"),
+            ),
+            (
+                i18n::t("À propos", "About").to_string(),
+                PaletteAction::Command("about"),
+            ),
+            (
+                i18n::t("Rejoindre un salon…", "Join a channel…").to_string(),
+                PaletteAction::Input("/join "),
+            ),
+            (
+                i18n::t("Changer de pseudo…", "Change nickname…").to_string(),
+                PaletteAction::Input("/nick "),
+            ),
+            (
+                i18n::t("Quitter", "Quit").to_string(),
+                PaletteAction::Command("quit"),
+            ),
+        ];
+        {
+            let model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+            for buffer in model.buffers.values() {
+                let label = format!("{} {}", buffer.kind.icon(), buffer.name);
+                items.push((label, PaletteAction::Buffer(buffer.id)));
+            }
+        }
+        items
+    }
+
+    fn run_palette(&mut self, input: String, cx: &mut Context<Self>) {
+        let query = input.trim().to_lowercase();
+        if input.trim().starts_with('/') {
+            self.palette_open = false;
+            self.send_input(input, cx);
+            return;
+        }
+        let item = self
+            .palette_items()
+            .into_iter()
+            .find(|(label, _)| label.to_lowercase().contains(&query));
+        if let Some((_, action)) = item {
+            self.run_palette_action(action, cx);
+        }
+    }
+
+    fn run_palette_action(&mut self, action: PaletteAction, cx: &mut Context<Self>) {
+        self.palette_open = false;
+        match action {
+            PaletteAction::Buffer(id) => {
+                self.switch_buffer(id, cx);
+                return;
+            }
+            PaletteAction::Input(prefix) => {
+                self.input
+                    .update(cx, |input, cx| input.set_text(prefix, cx));
+                self.should_focus_input = true;
+                cx.notify();
+                return;
+            }
+            PaletteAction::Command(name) => match name {
+                "preferences" => self.open_preferences(cx),
+                "themes" => {
+                    self.theme_picker_open = true;
+                    self.should_focus_input = false;
+                    cx.notify();
+                }
+                "search" => self.open_search(cx),
+                "saved" => {
+                    self.saved_open = true;
+                    self.should_focus_input = false;
+                    cx.notify();
+                }
+                "activity" => {
+                    self.activity_open = true;
+                    self.should_focus_input = false;
+                    cx.notify();
+                }
+                "emoji" => {
+                    self.emoji_open = true;
+                    self.focus_emoji_search = true;
+                    self.should_focus_input = false;
+                    cx.notify();
+                }
+                "schedule" => {
+                    self.schedule_open = true;
+                    cx.notify();
+                }
+                "dcc" => {
+                    self.dcc_open = true;
+                    cx.notify();
+                }
+                "list" => self.open_channel_list(None, cx),
+                "notifications" => self.toggle_notifications(cx),
+                "reconnect" => {
+                    if let Some((network_id, _, _, _)) = self.active_context()
+                        && let Some(handle) = self.networks.get(&network_id)
+                    {
+                        handle.reconnect();
+                    }
+                }
+                "disconnect" => {
+                    if let Some((network_id, _, _, _)) = self.active_context()
+                        && let Some(handle) = self.networks.get(&network_id)
+                    {
+                        handle.disconnect();
+                    }
+                }
+                "newnetwork" => self.open_form(cx),
+                "jitsi" => self.start_jitsi(None, cx),
+                "about" => {
+                    self.about_open = true;
+                    self.should_focus_input = false;
+                    cx.notify();
+                }
+                "quit" => {
+                    self.quitting = true;
+                    for handle in self.networks.values() {
+                        handle.shutdown();
+                    }
+                    cx.quit();
+                }
+                _ => {}
+            },
+        }
+    }
+
+    fn update_search(&mut self, cx: &mut Context<Self>) {
+        let query = self.search_input.read(cx).content().to_string();
+        let results = {
+            let model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+            model
+                .history
+                .as_ref()
+                .map(|history| history.search(&query, 60))
+                .unwrap_or_default()
+        };
+        self.search_results = results;
+        cx.notify();
+    }
+
+    fn open_selected_search_result(&mut self, cx: &mut Context<Self>) {
+        if let Some(hit) = self.search_results.first().cloned() {
+            self.open_search_hit(hit, cx);
+        }
+    }
+
+    fn open_search_hit(&mut self, hit: ircv3_core::SearchHit, cx: &mut Context<Self>) {
+        let network_id = {
+            let model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+            model
+                .networks
+                .iter()
+                .find(|network| format!("{}:{}", network.host, network.port) == hit.network)
+                .map(|network| network.id)
+        };
+        let Some(network_id) = network_id else {
+            self.set_status(
+                i18n::t(
+                    "Ce réseau n'est pas connecté dans cette session.",
+                    "This network is not connected in this session.",
+                ),
+                cx,
+            );
+            return;
+        };
+        let (buffer_id, index) = {
+            let mut model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+            let buffer_id = model.ensure_buffer(network_id, hit.kind, &hit.name);
+            let index = model.buffer(buffer_id).and_then(|buffer| {
+                buffer
+                    .messages
+                    .iter()
+                    .position(|line| {
+                        line.at == hit.line.at
+                            && line.text == hit.line.text
+                            && line.nick == hit.line.nick
+                    })
+                    .map(|index| index.saturating_sub(buffer.messages.len().saturating_sub(800)))
+            });
+            model.set_active(buffer_id);
+            (buffer_id, index)
+        };
+        self.search_open = false;
+        self.pending_scroll = index.map(|index| (buffer_id, index));
+        self.switch_buffer(buffer_id, cx);
+    }
+
+    fn open_buffer_at(&mut self, buffer_id: BufferId, index: usize, cx: &mut Context<Self>) {
+        {
+            let mut model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+            let visible = model
+                .buffer(buffer_id)
+                .map(|buffer| buffer.messages.len().saturating_sub(800))
+                .unwrap_or(0);
+            model.set_active(buffer_id);
+            self.pending_scroll = Some((buffer_id, index.saturating_sub(visible)));
+        }
+        self.activity_open = false;
+        self.switch_buffer(buffer_id, cx);
+    }
+
+    fn open_saved_message(&mut self, saved: &crate::saved::SavedMessage, cx: &mut Context<Self>) {
+        let network_id = {
+            let model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+            model
+                .networks
+                .iter()
+                .find(|network| format!("{}:{}", network.host, network.port) == saved.network)
+                .map(|network| network.id)
+        };
+        let Some(network_id) = network_id else {
+            self.set_status(
+                i18n::t(
+                    "Ce réseau n'est pas connecté dans cette session.",
+                    "This network is not connected in this session.",
+                ),
+                cx,
+            );
+            return;
+        };
+        let (buffer_id, pending) = {
+            let mut model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+            let buffer_id = model.ensure_buffer(network_id, saved.kind, &saved.buffer);
+            let index = model.buffer(buffer_id).and_then(|buffer| {
+                buffer
+                    .messages
+                    .iter()
+                    .position(|line| {
+                        saved
+                            .msgid
+                            .as_deref()
+                            .is_some_and(|msgid| line.msgid.as_deref() == Some(msgid))
+                            || (line.text == saved.text && line.at.to_rfc3339() == saved.at)
+                    })
+                    .map(|index| index.saturating_sub(buffer.messages.len().saturating_sub(800)))
+            });
+            model.set_active(buffer_id);
+            (buffer_id, index)
+        };
+        self.saved_open = false;
+        self.pending_scroll = pending.map(|index| (buffer_id, index));
+        self.switch_buffer(buffer_id, cx);
+    }
+
+    fn open_message_menu(
+        &mut self,
+        buffer_id: BufferId,
+        line: ChatLine,
+        position: gpui::Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut items = Vec::new();
+        if line.msgid.is_some() {
+            items.push(MenuItem::new(
+                i18n::t("Répondre", "Reply"),
+                MenuAction::ReplyMessage(line.clone()),
+            ));
+            items.push(MenuItem::new(
+                i18n::t("Réagir…", "React…"),
+                MenuAction::ReactMessage(buffer_id, line.clone()),
+            ));
+            items.push(
+                MenuItem::new(
+                    i18n::t("Copier l'identifiant", "Copy message ID"),
+                    MenuAction::Copy(line.msgid.clone().unwrap_or_default()),
+                )
+                .separator(),
+            );
+        }
+        items.push(MenuItem::new(
+            i18n::t("Sauvegarder le message", "Save message"),
+            MenuAction::SaveMessage(buffer_id, line.clone()),
+        ));
+        items.push(MenuItem::new(
+            i18n::t("Copier le texte", "Copy text"),
+            MenuAction::Copy(line.text.clone()),
+        ));
+        self.open_popup(position.x, position.y, items, cx);
+    }
+
+    fn start_reply(&mut self, line: &ChatLine, cx: &mut Context<Self>) {
+        let Some(msgid) = line.msgid.clone() else {
+            self.set_status(
+                i18n::t(
+                    "Ce message n'a pas d'identifiant IRCv3.",
+                    "This message has no IRCv3 message ID.",
+                ),
+                cx,
+            );
+            return;
+        };
+        self.reply_target = Some(ReplyTarget {
+            msgid,
+            nick: line.nick.clone().unwrap_or_default(),
+            text: line.text.clone(),
+        });
+        self.should_focus_input = true;
+        self.popup = None;
+        cx.notify();
+    }
+
+    fn save_message(&mut self, buffer_id: BufferId, line: &ChatLine, cx: &mut Context<Self>) {
+        let (network, kind, name) = {
+            let model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(buffer) = model.buffer(buffer_id) else {
+                return;
+            };
+            let Some(network) = model.network(buffer.network) else {
+                return;
+            };
+            (
+                format!("{}:{}", network.host, network.port),
+                buffer.kind,
+                buffer.name.clone(),
+            )
+        };
+        self.saved_messages.add(
+            network,
+            kind,
+            name,
+            line.nick.clone(),
+            line.text.clone(),
+            line.at,
+            line.msgid.clone(),
+        );
+        self.set_status(i18n::t("Message sauvegardé.", "Message saved."), cx);
+        self.popup = None;
+    }
+
+    fn start_reaction(&mut self, buffer_id: BufferId, line: &ChatLine, cx: &mut Context<Self>) {
+        let Some(msgid) = line.msgid.clone() else {
+            self.set_status(
+                i18n::t(
+                    "Ce message n'a pas d'identifiant IRCv3.",
+                    "This message has no IRCv3 message ID.",
+                ),
+                cx,
+            );
+            return;
+        };
+        self.reaction_target = Some((buffer_id, msgid));
+        self.emoji_open = true;
+        self.focus_emoji_search = true;
+        self.popup = None;
+        cx.notify();
+    }
+
     fn set_language(&mut self, lang: Lang, cx: &mut Context<Self>) {
         i18n::set_lang(lang);
         self.config.language = lang.code().to_string();
@@ -3116,6 +3822,11 @@ impl AppRoot {
                 )
                 .shortcut("Ctrl+N"),
                 MenuItem::new(
+                    i18n::t("Palette de commandes…", "Command palette…"),
+                    MenuAction::Palette,
+                )
+                .shortcut("Ctrl+K"),
+                MenuItem::new(
                     i18n::t("Préférences…", "Preferences…"),
                     MenuAction::Preferences,
                 )
@@ -3123,6 +3834,19 @@ impl AppRoot {
                 MenuItem::new(
                     i18n::t("Téléverser un fichier…", "Upload a file…"),
                     MenuAction::Upload,
+                ),
+                MenuItem::new(
+                    i18n::t("Rechercher dans les messages…", "Search messages…"),
+                    MenuAction::SearchMessages,
+                )
+                .shortcut("Ctrl+Shift+F"),
+                MenuItem::new(
+                    i18n::t("Messages sauvegardés…", "Saved messages…"),
+                    MenuAction::SavedMessages,
+                ),
+                MenuItem::new(
+                    i18n::t("Activité récente…", "Recent activity…"),
+                    MenuAction::Activity,
                 ),
                 MenuItem::new(
                     i18n::t("Messages planifiés…", "Scheduled messages…"),
@@ -3335,7 +4059,9 @@ impl AppRoot {
         position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
-        let items = vec![
+        let muted = self.is_buffer_muted(buffer_id);
+        let mute_key = self.buffer_storage_key(buffer_id);
+        let mut items = vec![
             if joined {
                 MenuItem::new(
                     i18n::t("Partir du salon", "Leave channel"),
@@ -3363,6 +4089,19 @@ impl AppRoot {
                 MenuAction::CloseBuffer(buffer_id),
             ),
         ];
+        if let Some(key) = mute_key {
+            items.push(
+                MenuItem::new(
+                    if muted {
+                        i18n::t("Réactiver les notifications", "Unmute notifications")
+                    } else {
+                        i18n::t("Couper les notifications", "Mute notifications")
+                    },
+                    MenuAction::ToggleMute(key),
+                )
+                .checked(muted),
+            );
+        }
         self.open_popup(position.x, position.y, items, cx);
     }
 
@@ -3373,7 +4112,9 @@ impl AppRoot {
         position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
     ) {
-        let items = vec![
+        let muted = self.is_buffer_muted(buffer_id);
+        let mute_key = self.buffer_storage_key(buffer_id);
+        let mut items = vec![
             MenuItem::new(i18n::t("Whois", "Whois"), MenuAction::Whois(nick.clone())),
             MenuItem::new(
                 i18n::t("Surveiller (MONITOR)", "Monitor"),
@@ -3389,6 +4130,19 @@ impl AppRoot {
                 MenuAction::CloseBuffer(buffer_id),
             ),
         ];
+        if let Some(key) = mute_key {
+            items.push(
+                MenuItem::new(
+                    if muted {
+                        i18n::t("Réactiver les notifications", "Unmute notifications")
+                    } else {
+                        i18n::t("Couper les notifications", "Mute notifications")
+                    },
+                    MenuAction::ToggleMute(key),
+                )
+                .checked(muted),
+            );
+        }
         self.open_popup(position.x, position.y, items, cx);
     }
 
@@ -3578,6 +4332,41 @@ impl AppRoot {
             MenuAction::Kick(nick) => self.send_command(format!("/kick {nick}"), cx),
             MenuAction::Ban(nick) => self.send_command(format!("/ban {nick}!*@*"), cx),
             MenuAction::Invite(nick) => self.send_command(format!("/invite {nick}"), cx),
+            MenuAction::ReplyMessage(line) => self.start_reply(&line, cx),
+            MenuAction::ReactMessage(buffer_id, line) => self.start_reaction(buffer_id, &line, cx),
+            MenuAction::SaveMessage(buffer_id, line) => self.save_message(buffer_id, &line, cx),
+            MenuAction::SearchMessages => self.open_search(cx),
+            MenuAction::SavedMessages => {
+                self.saved_open = true;
+                self.search_open = false;
+                self.activity_open = false;
+                self.popup = None;
+                cx.notify();
+            }
+            MenuAction::Activity => {
+                self.activity_open = true;
+                self.search_open = false;
+                self.saved_open = false;
+                self.popup = None;
+                cx.notify();
+            }
+            MenuAction::Palette => self.open_palette(cx),
+            MenuAction::ToggleMute(key) => {
+                if let Some(index) = self
+                    .config
+                    .muted_buffers
+                    .iter()
+                    .position(|existing| existing == &key)
+                {
+                    self.config.muted_buffers.remove(index);
+                } else {
+                    self.config.muted_buffers.push(key);
+                }
+                if let Err(error) = self.config.save() {
+                    log::warn!("sauvegarde du tampon muet impossible : {error}");
+                }
+                cx.notify();
+            }
         }
     }
 
@@ -4030,6 +4819,50 @@ impl AppRoot {
         }
     }
 
+    fn quiet_hours_active(&self) -> bool {
+        let Ok(start) = chrono::NaiveTime::parse_from_str(&self.config.quiet_hours_start, "%H:%M")
+        else {
+            return false;
+        };
+        let Ok(end) = chrono::NaiveTime::parse_from_str(&self.config.quiet_hours_end, "%H:%M")
+        else {
+            return false;
+        };
+        let now = Local::now().time();
+        if start <= end {
+            now >= start && now < end
+        } else {
+            now >= start || now < end
+        }
+    }
+
+    fn play_notification_sound(&self) {
+        if !self.config.sound_notifications {
+            return;
+        }
+        std::thread::spawn(|| {
+            #[cfg(target_os = "linux")]
+            {
+                if std::process::Command::new("canberra-gtk-play")
+                    .args(["-i", "message"])
+                    .status()
+                    .is_ok_and(|status| status.success())
+                {
+                    return;
+                }
+                let _ = std::process::Command::new("paplay")
+                    .arg("/usr/share/sounds/freedesktop/stereo/message.oga")
+                    .status();
+            }
+            #[cfg(target_os = "macos")]
+            {
+                let _ = std::process::Command::new("afplay")
+                    .arg("/System/Library/Sounds/Glass.aiff")
+                    .status();
+            }
+        });
+    }
+
     fn check_notifications(&mut self, cx: &mut Context<Self>) {
         if !self.notifications_ready {
             let model = self.model.lock().unwrap_or_else(|e| e.into_inner());
@@ -4043,6 +4876,7 @@ impl AppRoot {
         let mut updates = Vec::new();
         let mut desktop = Vec::new();
         let mut toasts = Vec::new();
+        let quiet = self.quiet_hours_active();
         {
             let model = self.model.lock().unwrap_or_else(|e| e.into_inner());
             let active = model.active;
@@ -4052,7 +4886,12 @@ impl AppRoot {
                     continue;
                 }
                 updates.push((buffer.id, buffer.version));
-                if buffer.kind == BufferKind::Server {
+                if buffer.kind == BufferKind::Server || quiet {
+                    continue;
+                }
+                if storage_key(&model, buffer)
+                    .is_some_and(|key| self.config.muted_buffers.contains(&key))
+                {
                     continue;
                 }
                 let Some(line) = buffer.messages.back() else {
@@ -4099,11 +4938,15 @@ impl AppRoot {
         for (id, version) in updates {
             self.notify_seen.insert(id, version);
         }
+        let notified = !toasts.is_empty() || !desktop.is_empty();
         for (title, body) in toasts {
             self.push_toast(title, body);
         }
         for (title, body) in desktop {
             self.notify_desktop(&title, &body);
+        }
+        if notified && self.config.sound_notifications {
+            self.play_notification_sound();
         }
         if !self.toasts.is_empty() {
             cx.notify();
@@ -4129,6 +4972,682 @@ impl AppRoot {
     fn expire_toasts(&mut self) {
         let now = Instant::now();
         self.toasts.retain(|toast| toast.expires_at > now);
+    }
+
+    fn render_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        if self.focus_palette {
+            self.focus_palette = false;
+            let handle = self.palette_input.read(cx).focus_handle(cx);
+            window.focus(&handle);
+        }
+        let query = self.palette_input.read(cx).content().to_lowercase();
+        let items: Vec<(String, PaletteAction)> = self
+            .palette_items()
+            .into_iter()
+            .filter(|(label, _)| query.is_empty() || label.to_lowercase().contains(&query))
+            .take(40)
+            .collect();
+        let rows: Vec<AnyElement> = items
+            .into_iter()
+            .enumerate()
+            .map(|(index, (label, action))| {
+                div()
+                    .id(("palette-item", index))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .py_2()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme::panel_alt()))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            this.run_palette_action(action.clone(), cx);
+                        }),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme::text())
+                            .child(label),
+                    )
+                    .into_any_element()
+            })
+            .collect();
+
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .justify_center()
+            .pt(px(96.))
+            .bg(rgba(0x000000a8))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.palette_open = false;
+                    this.should_focus_input = true;
+                    cx.notify();
+                }),
+            )
+            .child(
+                div()
+                    .w(px(620.))
+                    .max_h(px(520.))
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .p_4()
+                    .rounded_lg()
+                    .bg(theme::panel())
+                    .border_1()
+                    .border_color(theme::border())
+                    .shadow_lg()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_lg()
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .child(i18n::t("Palette de commandes", "Command palette")),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.5))
+                                    .text_color(theme::muted())
+                                    .child("Ctrl+K"),
+                            ),
+                    )
+                    .child(self.palette_input.clone())
+                    .child(
+                        div()
+                            .id("palette-results")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .when(rows.is_empty(), |list| {
+                                list.child(
+                                    div()
+                                        .py_4()
+                                        .text_size(px(11.))
+                                        .text_color(theme::faint())
+                                        .child(i18n::t("Aucun résultat.", "No result.")),
+                                )
+                            })
+                            .children(rows),
+                    ),
+            )
+    }
+
+    fn render_search_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        if self.focus_search {
+            self.focus_search = false;
+            let handle = self.search_input.read(cx).focus_handle(cx);
+            window.focus(&handle);
+        }
+        let results = self.search_results.clone();
+        let rows: Vec<AnyElement> = results
+            .into_iter()
+            .map(|hit| {
+                let selected = hit.clone();
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .px_2()
+                    .py_2()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme::panel_alt()))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            this.open_search_hit(selected.clone(), cx);
+                        }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .text_size(px(10.5))
+                            .text_color(theme::muted())
+                            .child(hit.line.at.format("%d/%m %H:%M").to_string())
+                            .child(hit.name.clone())
+                            .child(hit.line.nick.as_deref().unwrap_or("?").to_string()),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme::text())
+                            .child(hit.line.text.clone()),
+                    )
+                    .into_any_element()
+            })
+            .collect();
+
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgba(0x000000a8))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.search_open = false;
+                    this.should_focus_input = true;
+                    cx.notify();
+                }),
+            )
+            .child(
+                div()
+                    .w(px(760.))
+                    .max_h(px(620.))
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .p_5()
+                    .rounded_lg()
+                    .bg(theme::panel())
+                    .border_1()
+                    .border_color(theme::border())
+                    .shadow_lg()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_xl()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .child(i18n::t(
+                                        "Rechercher dans les messages",
+                                        "Search messages",
+                                    )),
+                            )
+                            .child(
+                                div()
+                                    .id("search-close")
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::panel_alt()))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.search_open = false;
+                                            this.should_focus_input = true;
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child("✕"),
+                            ),
+                    )
+                    .child(self.search_input.clone())
+                    .child(
+                        div()
+                            .id("search-results")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .when(rows.is_empty(), |list| {
+                                list.child(
+                                    div()
+                                        .py_4()
+                                        .text_size(px(11.))
+                                        .text_color(theme::faint())
+                                        .child(i18n::t(
+                                            "Aucun résultat dans l'historique local.",
+                                            "No result in local history.",
+                                        )),
+                                )
+                            })
+                            .children(rows),
+                    ),
+            )
+    }
+
+    fn render_activity_dialog(&mut self, cx: &mut Context<Self>) -> Div {
+        let mut items: Vec<(BufferId, usize, BufferKind, String, ChatLine)> = {
+            let model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+            let mut items = Vec::new();
+            for buffer in model.buffers.values() {
+                if buffer.kind == BufferKind::Server {
+                    continue;
+                }
+                for (index, line) in buffer.messages.iter().enumerate() {
+                    let directed = buffer.kind == BufferKind::Query
+                        && matches!(line.kind, LineKind::Message | LineKind::Action);
+                    if !line.self_nick && (line.mention || directed) {
+                        items.push((
+                            buffer.id,
+                            index,
+                            buffer.kind,
+                            buffer.name.clone(),
+                            line.clone(),
+                        ));
+                    }
+                }
+            }
+            items
+        };
+        items.sort_by(|left, right| right.4.at.cmp(&left.4.at));
+        items.truncate(120);
+        let rows: Vec<AnyElement> = items
+            .into_iter()
+            .map(|(buffer_id, index, kind, name, line)| {
+                div()
+                    .id(("activity", buffer_id as usize * 10_000 + index))
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .px_2()
+                    .py_2()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme::panel_alt()))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, cx| {
+                            this.open_buffer_at(buffer_id, index, cx);
+                        }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .text_size(px(10.5))
+                            .text_color(theme::muted())
+                            .child(line.at.format("%d/%m %H:%M").to_string())
+                            .child(format!("{} {name}", kind.icon()))
+                            .child(line.nick.clone().unwrap_or_else(|| "?".to_string())),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme::text())
+                            .child(line.text.clone()),
+                    )
+                    .into_any_element()
+            })
+            .collect();
+
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgba(0x000000a8))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.activity_open = false;
+                    this.should_focus_input = true;
+                    cx.notify();
+                }),
+            )
+            .child(
+                div()
+                    .w(px(760.))
+                    .max_h(px(620.))
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .p_5()
+                    .rounded_lg()
+                    .bg(theme::panel())
+                    .border_1()
+                    .border_color(theme::border())
+                    .shadow_lg()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .text_xl()
+                                    .font_weight(gpui::FontWeight::BOLD)
+                                    .child(i18n::t("Activité récente", "Recent activity")),
+                            )
+                            .child(
+                                div()
+                                    .id("activity-close")
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::panel_alt()))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.activity_open = false;
+                                            this.should_focus_input = true;
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child("✕"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .id("activity-results")
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .when(rows.is_empty(), |list| {
+                                list.child(
+                                    div()
+                                        .py_4()
+                                        .text_size(px(11.))
+                                        .text_color(theme::faint())
+                                        .child(i18n::t(
+                                            "Aucune activité récente.",
+                                            "No recent activity.",
+                                        )),
+                                )
+                            })
+                            .children(rows),
+                    ),
+            )
+    }
+
+    fn render_saved_dialog(&mut self, cx: &mut Context<Self>) -> Div {
+        let query = self.saved_search.read(cx).content().to_string();
+        let items: Vec<_> = self
+            .saved_messages
+            .filtered(&query)
+            .into_iter()
+            .cloned()
+            .collect();
+        let rows: Vec<AnyElement> = items
+            .into_iter()
+            .map(|saved| {
+                let open = saved.clone();
+                let id = saved.id;
+                let note = saved.note.clone();
+                let edit_label = saved.label.clone();
+                let label = if saved.label.is_empty() {
+                    saved.buffer.clone()
+                } else {
+                    format!("{} · {}", saved.label, saved.buffer)
+                };
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .px_2()
+                    .py_2()
+                    .border_b_1()
+                    .border_color(theme::border())
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .text_size(px(10.5))
+                            .text_color(theme::muted())
+                            .child(label)
+                            .child(saved.at_label())
+                            .child(saved.nick.clone().unwrap_or_else(|| "?".to_string()))
+                            .child(div().flex_1())
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::panel_alt()))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, _, cx| {
+                                            this.open_saved_message(&open, cx);
+                                        }),
+                                    )
+                                    .child(i18n::t("Ouvrir", "Open")),
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::panel_alt()))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, _, cx| {
+                                            this.saved_edit_id = Some(id);
+                                            this.saved_note_input.update(cx, |input, cx| {
+                                                input.set_text(note.clone(), cx)
+                                            });
+                                            this.saved_label_input.update(cx, |input, cx| {
+                                                input.set_text(edit_label.clone(), cx)
+                                            });
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(i18n::t("Note", "Note")),
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .text_color(theme::red())
+                                    .hover(|style| style.bg(theme::error_alpha(0.15)))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, _, cx| {
+                                            this.saved_messages.remove(id);
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child("✕"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme::text())
+                            .child(saved.text.clone()),
+                    )
+                    .when(!saved.note.is_empty(), |card| {
+                        card.child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(theme::muted())
+                                .child(saved.note.clone()),
+                        )
+                    })
+                    .into_any_element()
+            })
+            .collect();
+
+        let edit_form = self.saved_edit_id.and_then(|id| {
+            if !self.saved_messages.items.iter().any(|item| item.id == id) {
+                return None;
+            }
+            Some(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .p_3()
+                    .rounded_md()
+                    .bg(theme::panel_alt())
+                    .border_1()
+                    .border_color(theme::border())
+                    .child(
+                        div()
+                            .text_size(px(10.5))
+                            .text_color(theme::muted())
+                            .child(i18n::t("Libellé", "Label")),
+                    )
+                    .child(self.saved_label_input.clone())
+                    .child(
+                        div()
+                            .text_size(px(10.5))
+                            .text_color(theme::muted())
+                            .child(i18n::t("Note privée", "Private note")),
+                    )
+                    .child(self.saved_note_input.clone())
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded_sm()
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(theme::panel()))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, _, _, cx| {
+                                            this.saved_edit_id = None;
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(i18n::t("Annuler", "Cancel")),
+                            )
+                            .child(
+                                div()
+                                    .px_3()
+                                    .py_1()
+                                    .rounded_sm()
+                                    .bg(theme::accent())
+                                    .text_color(theme::on_accent())
+                                    .cursor_pointer()
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(move |this, _, _, cx| {
+                                            let note = this
+                                                .saved_note_input
+                                                .read(cx)
+                                                .content()
+                                                .to_string();
+                                            let label = this
+                                                .saved_label_input
+                                                .read(cx)
+                                                .content()
+                                                .to_string();
+                                            this.saved_messages.set_note(id, note, label);
+                                            this.saved_edit_id = None;
+                                            cx.notify();
+                                        }),
+                                    )
+                                    .child(i18n::t("Enregistrer", "Save")),
+                            ),
+                    ),
+            )
+        });
+
+        let mut dialog = div()
+            .w(px(760.))
+            .max_h(px(620.))
+            .flex()
+            .flex_col()
+            .gap_3()
+            .p_5()
+            .rounded_lg()
+            .bg(theme::panel())
+            .border_1()
+            .border_color(theme::border())
+            .shadow_lg()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_xl()
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .child(i18n::t("Messages sauvegardés", "Saved messages")),
+                    )
+                    .child(
+                        div()
+                            .id("saved-close")
+                            .px_2()
+                            .py_1()
+                            .rounded_sm()
+                            .cursor_pointer()
+                            .hover(|style| style.bg(theme::panel_alt()))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.saved_open = false;
+                                    this.saved_edit_id = None;
+                                    this.should_focus_input = true;
+                                    cx.notify();
+                                }),
+                            )
+                            .child("✕"),
+                    ),
+            );
+        if let Some(form) = edit_form {
+            dialog = dialog.child(form);
+        }
+        dialog = dialog.child(self.saved_search.clone()).child(
+            div()
+                .id("saved-results")
+                .flex_1()
+                .min_h_0()
+                .overflow_y_scroll()
+                .when(rows.is_empty(), |list| {
+                    list.child(
+                        div()
+                            .py_4()
+                            .text_size(px(11.))
+                            .text_color(theme::faint())
+                            .child(i18n::t("Aucun message sauvegardé.", "No saved message.")),
+                    )
+                })
+                .children(rows),
+        );
+
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgba(0x000000a8))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.saved_open = false;
+                    this.saved_edit_id = None;
+                    this.should_focus_input = true;
+                    cx.notify();
+                }),
+            )
+            .child(dialog)
     }
 
     fn render_toasts(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
@@ -4250,6 +5769,24 @@ impl AppRoot {
     }
 
     fn insert_emoji(&mut self, emoji: &str, cx: &mut Context<Self>) {
+        if let Some((buffer_id, msgid)) = self.reaction_target.take() {
+            let network_id = {
+                let mut model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+                let Some(buffer) = model.buffer(buffer_id) else {
+                    return;
+                };
+                let network_id = buffer.network;
+                model.set_active(buffer_id);
+                network_id
+            };
+            if let Some(handle) = self.networks.get(&network_id) {
+                handle.send_input(format!("/react {msgid} {emoji}"));
+            }
+            self.emoji_open = false;
+            self.should_focus_input = true;
+            cx.notify();
+            return;
+        }
         self.input
             .update(cx, |input, cx| input.insert_text(emoji, cx));
         self.emoji_open = false;
@@ -4259,6 +5796,111 @@ impl AppRoot {
 
     fn handle_special_command(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
         let trimmed = text.trim();
+        if trimmed == "/quiet" || trimmed == "/quiet off" {
+            self.config.quiet_hours_start.clear();
+            self.config.quiet_hours_end.clear();
+            if let Err(error) = self.config.save() {
+                log::warn!("sauvegarde des heures calmes impossible : {error}");
+            }
+            self.set_status(
+                i18n::t("Heures calmes désactivées.", "Quiet hours disabled."),
+                cx,
+            );
+            self.input.update(cx, |input, cx| input.clear(cx));
+            return true;
+        }
+        if let Some(rest) = trimmed.strip_prefix("/quiet ") {
+            let mut parts = rest.split_whitespace();
+            let start = parts.next().unwrap_or("");
+            let end = parts.next().unwrap_or("");
+            let parse = |value: &str| chrono::NaiveTime::parse_from_str(value, "%H:%M").ok();
+            match (parse(start), parse(end)) {
+                (Some(start), Some(end)) => {
+                    self.config.quiet_hours_start = start.format("%H:%M").to_string();
+                    self.config.quiet_hours_end = end.format("%H:%M").to_string();
+                    if let Err(error) = self.config.save() {
+                        log::warn!("sauvegarde des heures calmes impossible : {error}");
+                    }
+                    self.set_status(
+                        format!(
+                            "{} {} → {}",
+                            i18n::t("Heures calmes :", "Quiet hours:"),
+                            self.config.quiet_hours_start,
+                            self.config.quiet_hours_end
+                        ),
+                        cx,
+                    );
+                }
+                _ => self.set_status(
+                    i18n::t(
+                        "Usage : /quiet 22:00 08:00 (ou /quiet off)",
+                        "Usage: /quiet 22:00 08:00 (or /quiet off)",
+                    ),
+                    cx,
+                ),
+            }
+            self.input.update(cx, |input, cx| input.clear(cx));
+            return true;
+        }
+        if trimmed == "/sound on" || trimmed == "/sound off" {
+            self.config.sound_notifications = trimmed.ends_with("on");
+            if let Err(error) = self.config.save() {
+                log::warn!("sauvegarde des sons impossible : {error}");
+            }
+            self.set_status(
+                if self.config.sound_notifications {
+                    i18n::t(
+                        "Sons de notification activés.",
+                        "Notification sounds enabled.",
+                    )
+                } else {
+                    i18n::t(
+                        "Sons de notification désactivés.",
+                        "Notification sounds disabled.",
+                    )
+                },
+                cx,
+            );
+            self.input.update(cx, |input, cx| input.clear(cx));
+            return true;
+        }
+        if trimmed == "/mute" {
+            let Some(key) = self.active_draft_key() else {
+                self.set_status(i18n::t("Aucun tampon actif.", "No active buffer."), cx);
+                return true;
+            };
+            let muted = if let Some(index) = self
+                .config
+                .muted_buffers
+                .iter()
+                .position(|existing| existing == &key)
+            {
+                self.config.muted_buffers.remove(index);
+                false
+            } else {
+                self.config.muted_buffers.push(key);
+                true
+            };
+            if let Err(error) = self.config.save() {
+                log::warn!("sauvegarde du tampon muet impossible : {error}");
+            }
+            self.set_status(
+                if muted {
+                    i18n::t(
+                        "Notifications coupées pour ce tampon.",
+                        "Notifications muted for this buffer.",
+                    )
+                } else {
+                    i18n::t(
+                        "Notifications réactivées pour ce tampon.",
+                        "Notifications unmuted for this buffer.",
+                    )
+                },
+                cx,
+            );
+            self.input.update(cx, |input, cx| input.clear(cx));
+            return true;
+        }
         if trimmed == "/emoji" {
             self.emoji_open = true;
             self.input.update(cx, |input, cx| input.clear(cx));
@@ -5155,6 +6797,9 @@ impl Render for AppRoot {
             .on_action(cx.listener(Self::open_themes_action))
             .on_action(cx.listener(Self::open_emoji_action))
             .on_action(cx.listener(Self::open_preferences_action))
+            .on_action(cx.listener(Self::open_search_action))
+            .on_action(cx.listener(Self::open_saved_action))
+            .on_action(cx.listener(Self::open_palette_action))
             .on_mouse_move(cx.listener(Self::on_root_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_root_mouse_up))
             .on_action(cx.listener(Self::tab_next))
@@ -5191,6 +6836,18 @@ impl Render for AppRoot {
 
         if self.theme_picker_open {
             root = root.child(self.render_theme_picker(cx));
+        }
+        if self.search_open {
+            root = root.child(self.render_search_dialog(window, cx));
+        }
+        if self.palette_open {
+            root = root.child(self.render_palette(window, cx));
+        }
+        if self.saved_open {
+            root = root.child(self.render_saved_dialog(cx));
+        }
+        if self.activity_open {
+            root = root.child(self.render_activity_dialog(cx));
         }
         if self.emoji_open {
             if self.focus_emoji_search {
@@ -5235,6 +6892,10 @@ impl Render for AppRoot {
             && !self.schedule_open
             && !self.rename_open
             && !self.about_open
+            && !self.search_open
+            && !self.saved_open
+            && !self.activity_open
+            && !self.palette_open
             && self.pending_upload.is_none()
         {
             self.should_focus_input = false;
@@ -5253,9 +6914,29 @@ impl Focusable for AppRoot {
 
 impl Drop for AppRoot {
     fn drop(&mut self) {
+        self.draft_store.flush();
         for handle in self.networks.values() {
             handle.shutdown();
         }
+    }
+}
+
+fn storage_key(model: &AppModel, buffer: &ircv3_core::model::Buffer) -> Option<String> {
+    let network = model.network(buffer.network)?;
+    Some(format!(
+        "{}:{}|{}|{}",
+        network.host,
+        network.port,
+        buffer_kind_key(buffer.kind),
+        buffer.name
+    ))
+}
+
+fn buffer_kind_key(kind: BufferKind) -> &'static str {
+    match kind {
+        BufferKind::Server => "server",
+        BufferKind::Channel => "channel",
+        BufferKind::Query => "query",
     }
 }
 

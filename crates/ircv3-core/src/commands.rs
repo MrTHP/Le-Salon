@@ -69,6 +69,17 @@ pub enum ParsedCommand {
         target: String,
         text: Option<String>,
     },
+    Reply {
+        target: String,
+        msgid: String,
+        text: String,
+    },
+    React {
+        target: String,
+        msgid: String,
+        emoji: String,
+        remove: bool,
+    },
     Topic {
         channel: Option<String>,
         text: Option<String>,
@@ -197,6 +208,33 @@ pub fn parse(input: &str, active: Option<&ActiveBuffer>, _nick: &str) -> ParsedC
             ParsedCommand::Query {
                 target: first.to_string(),
                 text,
+            }
+        }
+        "reply" => {
+            let Some(target) = target else {
+                return local_error("/reply : aucun salon actif");
+            };
+            if first.is_empty() || after_first.is_empty() {
+                return local_error("/reply identifiant texte");
+            }
+            ParsedCommand::Reply {
+                target,
+                msgid: first.to_string(),
+                text: strip_colon(after_first).to_string(),
+            }
+        }
+        "react" | "unreact" => {
+            let Some(target) = target else {
+                return local_error("/react : aucun salon actif");
+            };
+            if first.is_empty() || after_first.is_empty() {
+                return local_error("/react identifiant emoji");
+            }
+            ParsedCommand::React {
+                target,
+                msgid: first.to_string(),
+                emoji: after_first.trim().to_string(),
+                remove: command == "unreact",
             }
         }
         "me" | "action" => {
@@ -501,9 +539,11 @@ pub fn help_lines() -> Vec<&'static str> {
             "  /monitor +|- nick        /whois nick                /who [mask]",
             "  /list [filter]           /setname real name         /ping [target]",
             "  /raw IRC line            /clear                     /close",
+            "  /reply msgid text        /react msgid emoji         /unreact msgid emoji",
             "  /reconnect               /disconnect                /quit [reason]",
             "  /emoji                   /jitsi [room]              /upload [file]",
-            "  /schedule +10m text      /dcc send nick file        /dcc cancel",
+            "  /quiet 22:00 08:00       /quiet off                 /sound on|off",
+            "  /mute                    /schedule +10m text        /dcc send nick file",
             "",
             "Shortcuts: Tab completes a nickname, ↑/↓ browses history,",
             "Alt+1..9 switches tabs, Ctrl+L clears the active buffer.",
@@ -520,9 +560,11 @@ pub fn help_lines() -> Vec<&'static str> {
             "  /monitor +|- pseudo      /whois pseudo             /who [masque]",
             "  /list [filtre]           /setname nom réel         /ping [cible]",
             "  /raw ligne IRC           /clear                    /close",
+            "  /reply msgid texte       /react msgid emoji        /unreact msgid emoji",
             "  /reconnect               /disconnect               /quit [raison]",
             "  /emoji                   /jitsi [salle]            /upload [fichier]",
-            "  /schedule +10m texte     /dcc send pseudo fichier  /dcc cancel",
+            "  /quiet 22:00 08:00       /quiet off                /sound on|off",
+            "  /mute                    /schedule +10m texte       /dcc send pseudo fichier",
             "",
             "Raccourcis : Tab complète un pseudo, ↑/↓ parcourt l'historique,",
             "Alt+1..9 change d'onglet, Ctrl+L efface le tampon actif.",
@@ -619,6 +661,37 @@ mod tests {
             ParsedCommand::Query {
                 target: "alice".into(),
                 text: None
+            }
+        );
+    }
+
+    #[test]
+    fn reply_and_react_commands() {
+        let active = channel("#test");
+        assert_eq!(
+            parse("/reply msg-1 bonjour", Some(&active), "moi"),
+            ParsedCommand::Reply {
+                target: "#test".into(),
+                msgid: "msg-1".into(),
+                text: "bonjour".into()
+            }
+        );
+        assert_eq!(
+            parse("/react msg-1 👍", Some(&active), "moi"),
+            ParsedCommand::React {
+                target: "#test".into(),
+                msgid: "msg-1".into(),
+                emoji: "👍".into(),
+                remove: false
+            }
+        );
+        assert_eq!(
+            parse("/unreact msg-1 👍", Some(&active), "moi"),
+            ParsedCommand::React {
+                target: "#test".into(),
+                msgid: "msg-1".into(),
+                emoji: "👍".into(),
+                remove: true
             }
         );
     }

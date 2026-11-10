@@ -15,6 +15,7 @@ pub mod commands;
 pub mod config;
 pub mod dcc;
 pub mod formatting;
+pub mod history;
 pub mod i18n;
 pub mod media;
 pub mod message;
@@ -24,6 +25,7 @@ pub mod secrets;
 pub mod upload;
 
 pub use config::{Config, ConnectionConfig};
+pub use history::{HistoryStore, SearchHit};
 pub use i18n::Lang;
 pub use message::{Message, Prefix, Tag};
 pub use model::{

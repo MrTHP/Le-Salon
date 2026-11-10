@@ -5,7 +5,7 @@
 
 use gpui::{Pixels, SharedString};
 
-use ircv3_core::model::{BufferId, NetworkId};
+use ircv3_core::model::{BufferId, ChatLine, NetworkId};
 
 #[derive(Clone, Debug)]
 pub enum MenuAction {
@@ -47,6 +47,14 @@ pub enum MenuAction {
     Kick(String),
     Ban(String),
     Invite(String),
+    ReplyMessage(ChatLine),
+    ReactMessage(BufferId, ChatLine),
+    SaveMessage(BufferId, ChatLine),
+    SearchMessages,
+    SavedMessages,
+    Activity,
+    Palette,
+    ToggleMute(String),
 }
 
 #[derive(Clone, Debug)]

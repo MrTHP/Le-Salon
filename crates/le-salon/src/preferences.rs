@@ -18,6 +18,7 @@ pub struct Preferences {
     pub language: String,
     pub notifications: bool,
     pub in_app_toasts: bool,
+    pub sound_notifications: bool,
     pub toast_seconds: u64,
     pub confirm_upload: bool,
     pub notify_mentions_only: bool,
@@ -30,6 +31,7 @@ impl Preferences {
             language: config.language.clone(),
             notifications: config.notifications,
             in_app_toasts: config.in_app_toasts,
+            sound_notifications: config.sound_notifications,
             toast_seconds: config.toast_seconds.clamp(1, 10),
             confirm_upload: config.confirm_upload,
             notify_mentions_only: config.notify_mentions_only,
@@ -41,6 +43,7 @@ impl Preferences {
         config.language = self.language.clone();
         config.notifications = self.notifications;
         config.in_app_toasts = self.in_app_toasts;
+        config.sound_notifications = self.sound_notifications;
         config.toast_seconds = self.toast_seconds.clamp(1, 10);
         config.confirm_upload = self.confirm_upload;
         config.notify_mentions_only = self.notify_mentions_only;
@@ -355,6 +358,20 @@ impl Render for PreferencesWindow {
                     cx,
                 ))
                 .child(self.toggle_row(
+                    "pref-sound-notifications",
+                    i18n::t("Sons de notification", "Notification sounds"),
+                    i18n::t(
+                        "Jouer un son discret lors d'une alerte.",
+                        "Play a discreet sound when an alert fires.",
+                    ),
+                    self.prefs.sound_notifications,
+                    |this, _, _, cx| {
+                        this.prefs.sound_notifications = !this.prefs.sound_notifications;
+                        cx.notify();
+                    },
+                    cx,
+                ))
+                .child(self.toggle_row(
                     "pref-mentions-only",
                     i18n::t(
                         "Mentions et messages privés uniquement",
@@ -559,12 +576,14 @@ mod tests {
         config.toast_seconds = 3;
         config.confirm_upload = false;
         config.notify_mentions_only = false;
+        config.sound_notifications = false;
 
         let mut prefs = Preferences::from_config(&config);
         assert_eq!(prefs.theme, "tux");
         assert!(!prefs.in_app_toasts);
         assert!(!prefs.confirm_upload);
         assert!(!prefs.notify_mentions_only);
+        assert!(!prefs.sound_notifications);
 
         prefs.toast_seconds = 99;
         prefs.apply_to(&mut config);
