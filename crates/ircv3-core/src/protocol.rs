@@ -317,6 +317,16 @@ impl Session {
         self.with_model(|model| model.ensure_buffer(self.network_id, BufferKind::Query, nick))
     }
 
+    fn conversation_buffer(&self, from: &str, target: &str, self_nick: bool) -> BufferId {
+        if is_channel_name(target) {
+            self.channel_buffer(target)
+        } else if self_nick {
+            self.query_buffer(target)
+        } else {
+            self.query_buffer(from)
+        }
+    }
+
     fn append(
         &self,
         buffer_id: BufferId,
@@ -1465,6 +1475,7 @@ impl Session {
         if from.is_empty() || target.is_empty() {
             return Vec::new();
         }
+        let self_nick = irc_fold(&from) == irc_fold(&self.nick);
         let mut kind = LineKind::Message;
         let mut text = raw.clone();
         if raw.starts_with('\u{01}') && raw.ends_with('\u{01}') && raw.len() >= 2 {
@@ -1475,17 +1486,15 @@ impl Session {
             } else if inner == "ACTION" {
                 kind = LineKind::Action;
                 text = String::new();
+            } else if self_nick {
+                // Ne pas répondre à l'écho de notre propre CTCP.
+                return Vec::new();
             } else {
                 return self.reply_ctcp(&from, inner);
             }
         }
-        let buffer = if is_channel_name(&target) {
-            self.channel_buffer(&target)
-        } else {
-            self.query_buffer(&from)
-        };
-        let self_nick = irc_fold(&from) == irc_fold(&self.nick);
-        if self_nick && self.echo_message() && self.dedupe_self_echo(buffer, &text) {
+        let buffer = self.conversation_buffer(&from, &target, self_nick);
+        if self_nick && !self.echo_message() && self.dedupe_self_echo(buffer, &text) {
             return Vec::new();
         }
         let mention = !self_nick && mentions(&text, &self.nick);
@@ -1522,26 +1531,26 @@ impl Session {
 
     fn on_notice(&mut self, msg: &Message) -> Vec<String> {
         let from = msg.nick().unwrap_or("").to_string();
-        let target = msg.param(0).unwrap_or("").to_string();
+        let target = strip_statusmsg(msg.param(0).unwrap_or("")).to_string();
         let text = msg.param(1).unwrap_or("").to_string();
         let prefix_is_server = msg.prefix.as_ref().is_some_and(|prefix| prefix.is_server());
         if prefix_is_server || target == "*" || target.is_empty() {
             self.server_line(LineKind::Notice, text);
             return Vec::new();
         }
-        let buffer = if is_channel_name(&target) {
-            self.channel_buffer(&target)
-        } else {
-            self.query_buffer(&from)
-        };
-        let mention = mentions(&text, &self.nick);
+        let self_nick = irc_fold(&from) == irc_fold(&self.nick);
+        let buffer = self.conversation_buffer(&from, &target, self_nick);
+        if self_nick && self.dedupe_self_echo(buffer, &text) {
+            return Vec::new();
+        }
+        let mention = !self_nick && mentions(&text, &self.nick);
         self.append(
             buffer,
             LineKind::Notice,
             Some(from),
             text,
             mention,
-            false,
+            self_nick,
             msg.server_time(),
         );
         Vec::new()
@@ -1555,11 +1564,11 @@ impl Session {
         let Some(typing) = msg.tag("+typing") else {
             return Vec::new();
         };
-        let buffer = if is_channel_name(&target) {
-            self.channel_buffer(&target)
-        } else {
-            self.query_buffer(&from)
-        };
+        let self_nick = irc_fold(&from) == irc_fold(&self.nick);
+        if self_nick {
+            return Vec::new();
+        }
+        let buffer = self.conversation_buffer(&from, &target, self_nick);
         self.with_model(|model| {
             if let Some(buffer) = model.buffer_mut(buffer) {
                 if typing == "active" {
@@ -2646,6 +2655,54 @@ mod tests {
         let buffer = model.buffer(channel).unwrap();
         assert!(buffer.messages.back().unwrap().self_nick);
         assert_eq!(buffer.messages.back().unwrap().text, "bonjour");
+    }
+
+    #[test]
+    fn own_privmsg_echo_is_routed_to_recipient_query() {
+        let (mut session, model) = session();
+        session.on_line(":irc.test CAP * LS :echo-message typing");
+        session.on_line(":irc.test CAP * ACK :echo-message typing");
+        session.on_line(":irc.test 001 moi :Bienvenue");
+
+        let outcome = session.handle_user_input("/msg alice bonjour");
+        assert_eq!(
+            outcome.lines,
+            vec!["@+typing=done TAGMSG alice", "PRIVMSG alice :bonjour"]
+        );
+        session.on_line("@+typing=done :moi!m@h TAGMSG alice");
+        session.on_line(":moi!m@h PRIVMSG alice :bonjour");
+
+        let model = model.lock().unwrap();
+        let network = model.active_network().unwrap();
+        let alice = model
+            .find_buffer(network.id, BufferKind::Query, "alice")
+            .expect("query buffer for alice");
+        assert_eq!(model.buffer(alice).unwrap().messages.len(), 1);
+        assert!(
+            model
+                .find_buffer(network.id, BufferKind::Query, "moi")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn repeated_own_messages_with_echo_message_are_kept() {
+        let (mut session, model) = session();
+        session.on_line(":irc.test CAP * LS :echo-message");
+        session.on_line(":irc.test CAP * ACK :echo-message");
+        session.on_line(":irc.test 001 moi :Bienvenue");
+
+        for _ in 0..2 {
+            session.handle_user_input("/msg alice bonjour");
+            session.on_line(":moi!m@h PRIVMSG alice :bonjour");
+        }
+
+        let model = model.lock().unwrap();
+        let network = model.active_network().unwrap();
+        let alice = model
+            .find_buffer(network.id, BufferKind::Query, "alice")
+            .expect("query buffer for alice");
+        assert_eq!(model.buffer(alice).unwrap().messages.len(), 2);
     }
 
     #[test]
