@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self' https://api.github.com; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'; upgrade-insecure-requests">
   <title>Le Salon — IRC, enfin beau.</title>
-  <meta name="description" content="Le Salon est un client IRCv3 natif, rapide et sécurisé : interface GPU, TLS, SASL, 19 thèmes, toasts, préférences et zéro télémétrie. Télécharge l'AppImage Linux.">
+  <meta name="description" content="Le Salon est un client IRCv3 natif, rapide et sécurisé : interface GPU, TLS, SASL, chiffrement RelayCrypt et compatibilité FiSH, 19 thèmes et zéro télémétrie. Télécharge l'AppImage Linux.">
   <meta name="theme-color" content="#070b10">
   <meta name="color-scheme" content="dark">
   <meta name="referrer" content="strict-origin-when-cross-origin">
@@ -16,13 +16,13 @@
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://mrthp.github.io/Le-Salon/">
   <meta property="og:title" content="Le Salon — IRC, enfin beau.">
-  <meta property="og:description" content="Un client IRCv3 natif, rapide et sécurisé. Interface GPU, 19 thèmes, toasts, préférences. Linux &amp; macOS. Open source.">
+  <meta property="og:description" content="Un client IRCv3 natif, rapide et sécurisé. Interface GPU, chiffrement RelayCrypt/FiSH, 19 thèmes. Linux &amp; macOS. Open source.">
   <meta property="og:image" content="https://mrthp.github.io/Le-Salon/assets/screenshot.png">
   <meta property="og:image:width" content="1180">
   <meta property="og:image:height" content="760">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Le Salon — IRC, enfin beau.">
-  <meta name="twitter:description" content="Un client IRCv3 natif, rapide et sécurisé. Interface GPU, 19 thèmes, toasts, préférences. Open source.">
+  <meta name="twitter:description" content="Un client IRCv3 natif, rapide et sécurisé. Interface GPU, chiffrement RelayCrypt/FiSH, 19 thèmes. Open source.">
   <meta name="twitter:image" content="https://mrthp.github.io/Le-Salon/assets/screenshot.png">
 
   <link rel="stylesheet" href="assets/styles.css">
@@ -97,8 +97,8 @@
           </h1>
 
           <p class="lead">
-            <span class="lang-fr">Le Salon, c'est ton IRC sans la nostalgie visuelle. Une interface GPU instantanée, IRCv3 sérieux, TLS et SASL par défaut, des toasts, 19 thèmes — et zéro Electron.</span>
-            <span class="lang-en">Le Salon is IRC without the visual nostalgia. An instant GPU interface, serious IRCv3, TLS and SASL by default, toasts, 19 themes — and zero Electron.</span>
+            <span class="lang-fr">Le Salon, c'est ton IRC sans la nostalgie visuelle. Une interface GPU instantanée, IRCv3 sérieux, TLS/SASL par défaut, RelayCrypt et compatibilité FiSH, 19 thèmes — et zéro Electron.</span>
+            <span class="lang-en">Le Salon is IRC without the visual nostalgia. An instant GPU interface, serious IRCv3, TLS/SASL by default, RelayCrypt plus FiSH compatibility, 19 themes — and zero Electron.</span>
           </p>
 
           <div class="hero-actions">
@@ -114,7 +114,7 @@
           </div>
 
           <p class="hero-meta">
-            <span class="version-chip" data-version>v1.8.0</span>
+            <span class="version-chip" data-version>v1.9.0</span>
             <span aria-hidden="true">·</span>
             <span data-size>11,4 Mo</span>
             <span aria-hidden="true">·</span>
@@ -187,6 +187,12 @@
           </article>
 
           <article class="feature-card reveal">
+            <div class="feature-icon tone-green"><svg class="icon" aria-hidden="true"><use href="#i-lock"></use></svg></div>
+            <h3><span class="lang-fr">Chiffré, sans choisir son camp.</span><span class="lang-en">Encrypted, without picking sides.</span></h3>
+            <p><span class="lang-fr">RelayCrypt (XChaCha20-Poly1305) entre clients Le Salon ; FiSH (Blowfish ECB) pour mIRC, HexChat, irssi et ZNC. RelayCrypt reste prioritaire, FiSH s'active avec <code>/setkey</code>.</span><span class="lang-en">RelayCrypt (XChaCha20-Poly1305) between Le Salon clients; FiSH (Blowfish ECB) for mIRC, HexChat, irssi and ZNC. RelayCrypt stays preferred; FiSH is enabled with <code>/setkey</code>.</span></p>
+          </article>
+
+          <article class="feature-card reveal">
             <div class="feature-icon tone-pink"><svg class="icon" aria-hidden="true"><use href="#i-bell"></use></svg></div>
             <h3><span class="lang-fr">Des toasts qui préviennent.</span><span class="lang-en">Toasts that tell you.</span></h3>
             <p><span class="lang-fr">Un popup dans le coin pendant 2, 3 ou 5 secondes. Mentions et privés, ou tous les messages — au choix.</span><span class="lang-en">A corner popup for 2, 3 or 5 seconds. Mentions and DMs, or every message — your call.</span></p>
@@ -252,13 +258,13 @@
         <div class="spotlight-grid">
           <div class="spotlight-card reveal">
             <div class="spotlight-toast" aria-hidden="true">
-              <span class="demo-toast-icon">●</span>
-              <div><strong>alice</strong><span class="lang-fr">Message privé · il y a 2 s</span><span class="lang-en">Private message · 2s ago</span></div>
+              <span class="demo-toast-icon">🔒</span>
+              <div><strong>#salon</strong><span class="lang-fr">Message RelayCrypt · chiffré de bout en bout</span><span class="lang-en">RelayCrypt message · end-to-end encrypted</span></div>
             </div>
             <div>
-              <p class="eyebrow"><span class="lang-fr">Nouveau en 1.7</span><span class="lang-en">New in 1.7</span></p>
-              <h3><span class="lang-fr">Toasts discrets, contenu net.</span><span class="lang-en">Discreet toasts, clean content.</span></h3>
-              <p><span class="lang-fr">Le contenu est nettoyé avant affichage, la file est bornée, et tout se désactive en un clic.</span><span class="lang-en">Content is sanitized before display, the queue is bounded, and one click disables it all.</span></p>
+              <p class="eyebrow"><span class="lang-fr">Nouveau en 1.9</span><span class="lang-en">New in 1.9</span></p>
+              <h3><span class="lang-fr">Deux chiffrements, un seul réflexe.</span><span class="lang-en">Two ciphers, one habit.</span></h3>
+              <p><span class="lang-fr">RelayCrypt (XChaCha20-Poly1305) entre clients Le Salon, FiSH (Blowfish ECB) pour mIRC, HexChat, irssi et ZNC. RelayCrypt reste prioritaire ; <code>/setkey</code> active FiSH quand il le faut.</span><span class="lang-en">RelayCrypt (XChaCha20-Poly1305) between Le Salon clients, FiSH (Blowfish ECB) for mIRC, HexChat, irssi and ZNC. RelayCrypt stays preferred; <code>/setkey</code> enables FiSH when needed.</span></p>
             </div>
           </div>
 
@@ -338,6 +344,7 @@
             <div class="security-pills">
               <span class="pill"><svg class="icon" aria-hidden="true"><use href="#i-lock"></use></svg> TLS + vérif.</span>
               <span class="pill"><svg class="icon" aria-hidden="true"><use href="#i-shield"></use></svg> SASL verrouillé</span>
+              <span class="pill"><svg class="icon" aria-hidden="true"><use href="#i-lock"></use></svg> RelayCrypt + FiSH</span>
               <span class="pill"><svg class="icon" aria-hidden="true"><use href="#i-check"></use></svg> 0600 / 0700</span>
             </div>
             <a class="text-link" href="https://github.com/MrTHP/Le-Salon/blob/main/SECURITY.md" target="_blank" rel="noopener noreferrer">
@@ -350,6 +357,7 @@
             <li><svg class="icon check" aria-hidden="true"><use href="#i-check"></use></svg><span><strong><span class="lang-fr">TLS rustls</span><span class="lang-en">rustls TLS</span></strong><span class="lang-fr">Vérification du certificat activée par défaut.</span><span class="lang-en">Certificate verification enabled by default.</span></span></li>
             <li><svg class="icon check" aria-hidden="true"><use href="#i-check"></use></svg><span><strong><span class="lang-fr">SASL exigeant</span><span class="lang-en">Strict SASL</span></strong><span class="lang-fr">Pas de SASL sans TLS vérifié. Le mot de passe ne part jamais en clair.</span><span class="lang-en">No SASL without verified TLS. The password never leaves in clear text.</span></span></li>
             <li><svg class="icon check" aria-hidden="true"><use href="#i-check"></use></svg><span><strong><span class="lang-fr">Secrets par réseau</span><span class="lang-en">Per-network secrets</span></strong><span class="lang-fr">Trousseau système, indexé par (hôte, compte), repli 0600.</span><span class="lang-en">System keyring, indexed by (host, account), 0600 fallback.</span></span></li>
+            <li><svg class="icon check" aria-hidden="true"><use href="#i-check"></use></svg><span><strong><span class="lang-fr">Chiffrement à deux niveaux</span><span class="lang-en">Two-tier encryption</span></strong><span class="lang-fr">RelayCrypt XChaCha20-Poly1305 entre clients Le Salon ; FiSH Blowfish ECB pour mIRC/HexChat/irssi/ZNC. RelayCrypt reste prioritaire.</span><span class="lang-en">RelayCrypt XChaCha20-Poly1305 between Le Salon clients; FiSH Blowfish ECB for mIRC/HexChat/irssi/ZNC. RelayCrypt stays preferred.</span></span></li>
             <li><svg class="icon check" aria-hidden="true"><use href="#i-check"></use></svg><span><strong><span class="lang-fr">Zéro télémétrie</span><span class="lang-en">Zero telemetry</span></strong><span class="lang-fr">Pas de trackers, pas de requêtes cachées. Le site non plus.</span><span class="lang-en">No trackers, no hidden requests. Neither does this site.</span></span></li>
             <li><svg class="icon check" aria-hidden="true"><use href="#i-check"></use></svg><span><strong><span class="lang-fr">Audité en CI</span><span class="lang-en">Audited in CI</span></strong><span class="lang-fr">cargo audit et fmt à chaque build.</span><span class="lang-en">cargo audit and fmt on every build.</span></span></li>
             <li><svg class="icon check" aria-hidden="true"><use href="#i-check"></use></svg><span><strong><span class="lang-fr">Rust safe</span><span class="lang-en">Safe Rust</span></strong><span class="lang-fr">Pas de FFI maison, pas de shell avec des données IRC.</span><span class="lang-en">No custom FFI, no shell with IRC data.</span></span></li>
@@ -379,12 +387,12 @@
             <p class="install-meta">
               <span class="lang-fr">Linux x86_64</span><span class="lang-en">Linux x86_64</span>
               · <span data-size>11,4 Mo</span>
-              · <span data-version>v1.8.0</span>
+              · <span data-version>v1.9.0</span>
             </p>
 
             <div class="sha-block">
               <span class="sha-label">SHA-256</span>
-              <code data-sha>5360f4c521624d6c6b3789c9bd035319a1f31a94d62527eb7803a3753cf56c4d</code>
+              <code data-sha>c0528c04f3b9ef5756263edbe185283e40ed0c0ff71c477d5f861a12719a0fe8</code>
             </div>
           </div>
 
@@ -397,8 +405,8 @@
                   <span class="lang-fr">Copier</span><span class="lang-en">Copy</span>
                 </button>
               </div>
-              <pre><code id="install-command" data-command>chmod +x Le-Salon-1.8.0-x86_64.AppImage
-./Le-Salon-1.8.0-x86_64.AppImage</code></pre>
+              <pre><code id="install-command" data-command>chmod +x Le-Salon-1.9.0-x86_64.AppImage
+./Le-Salon-1.9.0-x86_64.AppImage</code></pre>
             </div>
             <p class="code-note">
               <svg class="icon" aria-hidden="true"><use href="#i-alert"></use></svg>
@@ -429,6 +437,10 @@
           <details class="reveal">
             <summary><span class="lang-fr">Où sont stockés mes mots de passe ?</span><span class="lang-en">Where are my passwords stored?</span></summary>
             <p><span class="lang-fr">Dans le trousseau système (Secret Service, Keychain, Credential Manager), par couple hôte/compte. Sans trousseau disponible, repli dans <code>config.toml</code> en 0600, dans un dossier 0700.</span><span class="lang-en">In the system keyring (Secret Service, Keychain, Credential Manager), per host/account. Without a keyring, a 0600 <code>config.toml</code> fallback inside a 0700 directory.</span></p>
+          </details>
+          <details class="reveal">
+            <summary><span class="lang-fr">Le Salon peut-il parler aux clients FiSH ?</span><span class="lang-en">Can Le Salon talk to FiSH clients?</span></summary>
+            <p><span class="lang-fr">Oui, en mode compatibilité : Blowfish ECB, avec <code>/setkey</code>, <code>/delkey</code>, <code>/showkey</code> et <code>/fish</code>. RelayCrypt (XChaCha20-Poly1305) reste utilisé en priorité entre clients Le Salon ; DH1080 et CBC ne sont pas pris en charge.</span><span class="lang-en">Yes, in compatibility mode: Blowfish ECB, with <code>/setkey</code>, <code>/delkey</code>, <code>/showkey</code> and <code>/fish</code>. RelayCrypt (XChaCha20-Poly1305) remains preferred between Le Salon clients; DH1080 and CBC are not supported.</span></p>
           </details>
           <details class="reveal">
             <summary><span class="lang-fr">Pourquoi une AppImage et pas un paquet ?</span><span class="lang-en">Why an AppImage instead of a package?</span></summary>

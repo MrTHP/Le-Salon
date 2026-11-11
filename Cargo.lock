@@ -794,6 +794,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "blowfish"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62ce3946557b35e71d1bbe07ec385073ce9eda05043f95de134eb578fcf1a298"
+dependencies = [
+ "byteorder",
+ "cipher 0.5.2",
+]
+
+[[package]]
 name = "bstr"
 version = "1.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3135,12 +3145,13 @@ checksum = "791930b43c0d5973160d90a8f3894509f2b273430f5c5c73b668636d0287c5c0"
 
 [[package]]
 name = "ircv3-core"
-version = "1.8.0"
+version = "1.9.0"
 dependencies = [
  "anyhow",
  "argon2",
  "async-channel 2.5.0",
  "base64 0.22.1",
+ "blowfish",
  "chacha20poly1305",
  "chrono",
  "dirs 6.0.0",
@@ -3340,7 +3351,7 @@ dependencies = [
 
 [[package]]
 name = "le-salon"
-version = "1.8.0"
+version = "1.9.0"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",

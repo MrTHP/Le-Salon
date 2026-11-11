@@ -857,7 +857,7 @@ impl Session {
                     .param(2)
                     .and_then(|value| value.parse::<usize>().ok())
                     .unwrap_or(0);
-                let topic = msg.param(3).unwrap_or("").to_string();
+                let topic = self.read_text(&channel, msg.param(3).unwrap_or(""));
                 if !channel.is_empty() {
                     self.with_model(|model| {
                         model.add_channel_entry(self.network_id, channel, users, topic);
@@ -919,9 +919,9 @@ impl Session {
             }
             332 => {
                 let channel = msg.param(1).unwrap_or("");
-                let topic = msg.param(2).unwrap_or("");
+                let topic = self.read_text(channel, msg.param(2).unwrap_or(""));
                 let buffer = self.channel_buffer(channel);
-                self.with_model(|model| model.set_topic(buffer, topic, None, None));
+                self.with_model(|model| model.set_topic(buffer, topic.clone(), None, None));
                 self.append(
                     buffer,
                     LineKind::Topic,
@@ -1647,7 +1647,7 @@ impl Session {
     fn on_topic(&mut self, msg: &Message) -> Vec<String> {
         let from = msg.nick().unwrap_or("").to_string();
         let channel = strip_statusmsg(msg.param(0).unwrap_or("")).to_string();
-        let topic = msg.param(1).unwrap_or("").to_string();
+        let topic = self.read_text(&channel, msg.param(1).unwrap_or(""));
         if channel.is_empty() {
             return Vec::new();
         }
@@ -2089,33 +2089,73 @@ impl Session {
         }
     }
 
+    fn fish_network_key(&self) -> String {
+        crate::fish::network_key(&self.config.host, self.config.port)
+    }
+
     fn wire_text(&self, target: &str, text: &str) -> String {
+        // RelayCrypt reste prioritaire : FiSH n'est utilisé que si aucune clé
+        // RelayCrypt n'existe pour cette cible.
+        let network = self.fish_network_key();
         self.with_model(|model| {
-            model
-                .encryption
-                .as_ref()
-                .and_then(|encryption| encryption.encrypt(target, text))
+            if let Some(encryption) = model.encryption.as_ref()
+                && let Some(encrypted) = encryption.encrypt(target, text)
+            {
+                return encrypted;
+            }
+            if let Some(fish) = model.fish.as_ref()
+                && let Some(encrypted) = fish.encrypt(&network, target, text)
+            {
+                return encrypted;
+            }
+            text.to_string()
         })
-        .unwrap_or_else(|| text.to_string())
     }
 
     fn read_text(&self, target: &str, text: &str) -> String {
-        if !crate::crypto::is_encrypted(text) {
+        if crate::crypto::is_encrypted(text) {
+            let decrypted = self.with_model(|model| {
+                model
+                    .encryption
+                    .as_ref()
+                    .and_then(|encryption| encryption.decrypt(target, text))
+            });
+            return decrypted.unwrap_or_else(|| {
+                t(
+                    "🔒 message chiffré (clé absente)",
+                    "🔒 encrypted message (missing key)",
+                )
+                .to_string()
+            });
+        }
+        if !crate::fish::is_encrypted(text) {
             return text.to_string();
         }
-        self.with_model(|model| {
+        let network = self.fish_network_key();
+        let result = self.with_model(|model| {
             model
-                .encryption
+                .fish
                 .as_ref()
-                .and_then(|encryption| encryption.decrypt(target, text))
-        })
-        .unwrap_or_else(|| {
-            t(
-                "🔒 message chiffré (clé absente)",
-                "🔒 encrypted message (missing key)",
+                .map(|fish| fish.decrypt(&network, target, text))
+        });
+        match result {
+            Some(Ok(plain)) => plain,
+            Some(Err(crate::fish::FishError::UnsupportedMode)) => t(
+                "🔒 message FiSH CBC (non pris en charge)",
+                "🔒 FiSH CBC message (unsupported)",
             )
-            .to_string()
-        })
+            .to_string(),
+            Some(Err(crate::fish::FishError::NoKey)) | None => t(
+                "🔒 message FiSH chiffré (clé absente)",
+                "🔒 encrypted FiSH message (missing key)",
+            )
+            .to_string(),
+            Some(Err(_)) => t(
+                "🔒 message FiSH illisible (clé incorrecte ?)",
+                "🔒 unreadable FiSH message (wrong key?)",
+            )
+            .to_string(),
+        }
     }
 
     fn push_multiline(
@@ -2291,7 +2331,8 @@ impl Session {
                 };
                 match text {
                     Some(text) if !text.is_empty() => {
-                        outcome.lines.push(format!("TOPIC {channel} :{text}"));
+                        let wire = self.wire_text(&channel, &text);
+                        outcome.lines.push(format!("TOPIC {channel} :{wire}"));
                     }
                     _ => outcome.lines.push(format!("TOPIC {channel}")),
                 }
@@ -2985,6 +3026,126 @@ mod tests {
         let last = model.buffer(query).unwrap().messages.back().unwrap();
         assert_eq!(last.text, "bonjour");
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn fish_private_and_channel_messages_roundtrip() {
+        let (mut session, model) = session();
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("le-salon-fish-{stamp}.json"));
+        let mut store = crate::fish::FishStore::new(&path);
+        store
+            .set_text("irc.test:6667", "alice", "blowfish")
+            .unwrap();
+        store
+            .set_text("irc.test:6667", "#test", "blowfish")
+            .unwrap();
+        model.lock().unwrap().enable_fish(store);
+
+        let outcome = session.handle_user_input("/msg alice qwertyui");
+        assert_eq!(
+            outcome.lines.last().unwrap(),
+            "PRIVMSG alice :+OK qKKBR.riU410"
+        );
+        session.on_line(":alice!a@h PRIVMSG moi :+OK qKKBR.riU410");
+
+        session.on_line(":moi!m@h JOIN #test");
+        let outcome = session.handle_user_input("/msg #test qwerty");
+        assert_eq!(
+            outcome.lines.last().unwrap(),
+            "PRIVMSG #test :+OK Ee5Cz.Dgr1q1"
+        );
+        session.on_line(":alice!a@h PRIVMSG #test :+OK Ee5Cz.Dgr1q1");
+
+        let model = model.lock().unwrap();
+        let network = model.active_network().unwrap();
+        let query = model
+            .find_buffer(network.id, BufferKind::Query, "alice")
+            .unwrap();
+        assert_eq!(
+            model.buffer(query).unwrap().messages.back().unwrap().text,
+            "qwertyui"
+        );
+        let channel = model
+            .find_buffer(network.id, BufferKind::Channel, "#test")
+            .unwrap();
+        assert_eq!(
+            model.buffer(channel).unwrap().messages.back().unwrap().text,
+            "qwerty"
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn fish_channel_topic_roundtrip() {
+        let (mut session, model) = session();
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("le-salon-fish-{stamp}.json"));
+        let mut store = crate::fish::FishStore::new(&path);
+        store
+            .set_text("irc.test:6667", "#test", "blowfish")
+            .unwrap();
+        model.lock().unwrap().enable_fish(store);
+
+        session.on_line(":moi!m@h JOIN #test");
+        let encrypted = crate::fish::encrypt_ecb(b"blowfish", "sujet secret").unwrap();
+        let outcome = session.handle_user_input("/topic #test sujet secret");
+        assert_eq!(
+            outcome.lines.last().unwrap(),
+            &format!("TOPIC #test :{encrypted}")
+        );
+        session.on_line(&format!(":alice!a@h TOPIC #test :{encrypted}"));
+
+        let model = model.lock().unwrap();
+        let network = model.active_network().unwrap();
+        let channel = model
+            .find_buffer(network.id, BufferKind::Channel, "#test")
+            .unwrap();
+        assert_eq!(model.buffer(channel).unwrap().topic, "sujet secret");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn relaycrypt_takes_priority_over_fish() {
+        let (mut session, model) = session();
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let fish_path = std::env::temp_dir().join(format!("le-salon-fish-{stamp}.json"));
+        let crypt_path = std::env::temp_dir().join(format!("le-salon-crypto-{stamp}.json"));
+        let mut fish = crate::fish::FishStore::new(&fish_path);
+        fish.set_text("irc.test:6667", "alice", "blowfish").unwrap();
+        model.lock().unwrap().enable_fish(fish);
+        let mut encryption = crate::crypto::EncryptionStore::new(&crypt_path);
+        encryption.generate_key("alice");
+        model.lock().unwrap().enable_encryption(encryption);
+
+        let outcome = session.handle_user_input("/msg alice bonjour");
+        let line = outcome.lines.last().unwrap();
+        assert!(line.starts_with("PRIVMSG alice :+relaycrypt:v1:"));
+        let _ = std::fs::remove_file(fish_path);
+        let _ = std::fs::remove_file(crypt_path);
+    }
+
+    #[test]
+    fn fish_without_key_shows_placeholder() {
+        let (mut session, model) = session();
+        session.on_line(":alice!a@h PRIVMSG moi :+OK qKKBR.riU410");
+        let model = model.lock().unwrap();
+        let network = model.active_network().unwrap();
+        let query = model
+            .find_buffer(network.id, BufferKind::Query, "alice")
+            .unwrap();
+        let last = model.buffer(query).unwrap().messages.back().unwrap();
+        assert!(last.text.starts_with('🔒'));
+        assert!(!last.text.contains("qKKBR"));
     }
 
     #[test]

@@ -3,7 +3,7 @@
 ## Versions prises en charge
 
 Les correctifs de sécurité sont appliqués à la dernière version publiée
-(actuellement **1.8.0**) et à la branche `main`.
+(actuellement **1.9.0**) et à la branche `main`.
 
 ## Ce que Le Salon garantit par défaut
 
@@ -23,8 +23,8 @@ Les correctifs de sécurité sont appliqués à la dernière version publiée
   `--sasl-password` ne modifient pas la configuration persistante et ne sont
   jamais enregistrés. Préférer `LE_SALON_SASL_PASSWORD` à `--sasl-password`,
   qui reste visible dans `ps`.
-- **Fichiers privés** : `config.toml` et `scheduled.json` sont écrits en
-  `0600`, dans un dossier `0700`.
+- **Fichiers privés** : `config.toml`, `scheduled.json`, `encryption.json`
+  et `fish_keys.json` sont écrits en `0600`, dans un dossier `0700`.
 - **Pas de télémétrie.** La seule requête HTTP sortante est le téléversement
   explicitement déclenché par l'utilisateur.
 - **Aucun shell avec des données IRC** : les notifications utilisent des
@@ -41,7 +41,19 @@ des vulnérabilités de Le Salon :
 - **SASL PLAIN** transmet le mot de passe au serveur IRC (chiffré par TLS).
   Utilise un mot de passe dédié, jamais celui de ton compte principal.
 - **Le serveur IRC voit les messages** : TLS protège le transport, pas le
-  serveur. Il n'y a pas de chiffrement de bout en bout.
+  serveur. RelayCrypt (XChaCha20-Poly1305) protège le contenu entre deux
+  clients Le Salon, et FiSH (Blowfish ECB) permet la compatibilité avec les
+  autres clients, mais le serveur voit toujours les métadonnées et les
+  messages non chiffrés.
+- **FiSH (Blowfish ECB) n'est pas un chiffrement moderne** : pas
+  d'authentification ni d'intégrité, motifs répétés visibles en ECB, clés
+  échangées hors bande et sans forward secrecy. Il est proposé uniquement
+  pour parler aux clients mIRC/HexChat/irssi/ZNC ; RelayCrypt reste
+  prioritaire dès qu'une clé existe.
+- **Historique local en clair** : les messages RelayCrypt/FiSH sont
+  déchiffrés avant d'être écrits dans `~/.config/le-salon/history/`. Le
+  dossier est protégé par les permissions de l'utilisateur, pas par une clé
+  de chiffrement au repos.
 - **DCC SEND n'est pas chiffré.** L'offre (IP, port) est relayée par le
   serveur IRC, qui peut se connecter avant le destinataire. N'envoie pas de
   fichier sensible par DCC.
@@ -84,7 +96,7 @@ Les AppImage sont construites par la CI GitHub à partir du tag correspondant.
 Compare le SHA-256 publié dans la note de release avec le fichier téléchargé :
 
 ```bash
-sha256sum Le-Salon-1.8.0-x86_64.AppImage
+sha256sum Le-Salon-1.9.0-x86_64.AppImage
 ```
 
 Ne télécharge les binaires que depuis la page officielle des releases.

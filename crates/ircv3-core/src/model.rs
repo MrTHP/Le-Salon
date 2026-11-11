@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     config::{Config, ConnectionConfig},
     crypto::EncryptionStore,
+    fish::FishStore,
     formatting::{self, FormatSpan},
     history::HistoryStore,
     irc_fold,
@@ -595,6 +596,8 @@ pub struct AppModel {
     pub history: Option<HistoryStore>,
     /// Clés de chiffrement RelayCrypt par cible.
     pub encryption: Option<EncryptionStore>,
+    /// Clés FiSH (compatibilité) par réseau et cible.
+    pub fish: Option<FishStore>,
 }
 
 impl AppModel {
@@ -611,6 +614,7 @@ impl AppModel {
             version: 0,
             history: None,
             encryption: None,
+            fish: None,
         }
     }
 
@@ -620,6 +624,10 @@ impl AppModel {
 
     pub fn enable_encryption(&mut self, encryption: EncryptionStore) {
         self.encryption = Some(encryption);
+    }
+
+    pub fn enable_fish(&mut self, fish: FishStore) {
+        self.fish = Some(fish);
     }
 
     pub fn alloc_id(&mut self) -> u64 {

@@ -4,6 +4,7 @@
 //!   * l'analyseur de messages IRC / IRCv3 (tags, préfixe, paramètres) ;
 //!   * le formatage mIRC (couleurs, gras, italique, souligné…) ;
 //!   * le modèle de session (réseaux, salons, privés, pseudos, historiques) ;
+//!   * le chiffrement RelayCrypt et la compatibilité FiSH (Blowfish ECB) ;
 //!   * l'exécution des commandes utilisateur (/join, /msg, /mode…) ;
 //!   * le transport TCP / TLS (rustls) et la boucle réseau.
 //!
@@ -15,6 +16,7 @@ pub mod commands;
 pub mod config;
 pub mod crypto;
 pub mod dcc;
+pub mod fish;
 pub mod formatting;
 pub mod history;
 pub mod i18n;
@@ -27,6 +29,7 @@ pub mod upload;
 
 pub use config::{Config, ConnectionConfig};
 pub use crypto::EncryptionStore;
+pub use fish::FishStore;
 pub use history::{HistoryStore, SearchHit};
 pub use i18n::Lang;
 pub use message::{Message, Prefix, Tag};

@@ -17,7 +17,7 @@ use gpui::{
 };
 
 use ircv3_core::{
-    APP_NAME, Config, ConnectionConfig, EncryptionStore, HistoryStore, Lang,
+    APP_NAME, Config, ConnectionConfig, EncryptionStore, FishStore, HistoryStore, Lang,
     client::{self, NetworkHandle},
     formatting, irc_fold, media,
     model::{
@@ -223,6 +223,13 @@ enum PaletteAction {
 
 /// Nettoie le texte affiché dans une notification : retire les codes mIRC,
 /// les contrôles et les caractères de direction Unicode.
+fn fish_compatibility_warning() -> &'static str {
+    i18n::t(
+        "⚠ Blowfish ECB, compatibilité seulement (pas un chiffrement moderne)",
+        "⚠ Blowfish ECB, compatibility only (not modern encryption)",
+    )
+}
+
 fn clean_notification_text(text: &str) -> String {
     formatting::parse(text).text
 }
@@ -341,6 +348,10 @@ impl AppRoot {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .enable_encryption(EncryptionStore::default());
+        model
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .enable_fish(FishStore::default());
         let (wake_tx, wake_rx) = async_channel::bounded(1);
         let input = cx.new(|cx| {
             TextInput::new(
@@ -3317,6 +3328,13 @@ impl AppRoot {
         let model = self.model.lock().unwrap_or_else(|e| e.into_inner());
         let buffer = model.active_buffer()?;
         Some((buffer.network, buffer.id, buffer.kind, buffer.name.clone()))
+    }
+
+    fn active_fish_network(&self) -> Option<String> {
+        let model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+        model
+            .active_network()
+            .map(|network| ircv3_core::fish::network_key(&network.host, network.port))
     }
 
     fn active_draft_key(&self) -> Option<String> {
@@ -6336,6 +6354,268 @@ impl AppRoot {
 
     fn handle_special_command(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
         let trimmed = text.trim();
+        if trimmed == "/keyx" || trimmed.starts_with("/keyx ") {
+            self.set_status(
+                i18n::t(
+                    "DH1080 n'est pas pris en charge dans cette version. Utilisez /setkey <cible> <clé>.",
+                    "DH1080 is not supported in this version. Use /setkey <target> <key>.",
+                ),
+                cx,
+            );
+            self.input.update(cx, |input, cx| input.clear(cx));
+            return true;
+        }
+        if trimmed == "/fish" || trimmed.starts_with("/fish ") {
+            let Some(network) = self.active_fish_network() else {
+                self.set_status(i18n::t("Aucun réseau actif.", "No active network."), cx);
+                self.input.update(cx, |input, cx| input.clear(cx));
+                return true;
+            };
+            let rest = trimmed.strip_prefix("/fish").unwrap_or("").trim();
+            let targets = {
+                let model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+                model
+                    .fish
+                    .as_ref()
+                    .map(|fish| fish.targets(&network))
+                    .unwrap_or_default()
+            };
+            let message = if rest == "list" {
+                if targets.is_empty() {
+                    i18n::t("Aucune clé FiSH configurée.", "No FiSH key configured.").to_string()
+                } else {
+                    targets.join(", ")
+                }
+            } else if rest.is_empty() || rest == "status" {
+                let target = self
+                    .active_context()
+                    .filter(|(_, _, kind, _)| *kind != BufferKind::Server)
+                    .map(|(_, _, _, name)| name);
+                match target {
+                    Some(target) => {
+                        let has_key = {
+                            let model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+                            model
+                                .fish
+                                .as_ref()
+                                .is_some_and(|fish| fish.has_key(&network, &target))
+                        };
+                        if has_key {
+                            format!(
+                                "{} {target} — {}",
+                                i18n::t("FiSH : clé définie pour", "FiSH: key set for"),
+                                fish_compatibility_warning()
+                            )
+                        } else {
+                            format!(
+                                "{} {target}",
+                                i18n::t("FiSH : aucune clé pour", "FiSH: no key for")
+                            )
+                        }
+                    }
+                    None => i18n::t("FiSH : aucune cible active.", "FiSH: no active target.")
+                        .to_string(),
+                }
+            } else {
+                i18n::t("Usage : /fish [list|status]", "Usage: /fish [list|status]").to_string()
+            };
+            self.set_status(message, cx);
+            self.input.update(cx, |input, cx| input.clear(cx));
+            return true;
+        }
+        if trimmed == "/setkey" || trimmed.starts_with("/setkey ") {
+            let Some(network) = self.active_fish_network() else {
+                self.set_status(i18n::t("Aucun réseau actif.", "No active network."), cx);
+                self.input.update(cx, |input, cx| input.clear(cx));
+                return true;
+            };
+            let active_target = self
+                .active_context()
+                .filter(|(_, _, kind, _)| *kind != BufferKind::Server)
+                .map(|(_, _, _, name)| name);
+            let rest = trimmed.strip_prefix("/setkey").unwrap_or("").trim();
+            let (target, key) = match rest.split_once(char::is_whitespace) {
+                Some((first, tail)) if !tail.trim().is_empty() => {
+                    (Some(first.to_string()), tail.trim())
+                }
+                _ if !rest.is_empty() => (active_target, rest),
+                _ => (None, ""),
+            };
+            let Some(target) = target else {
+                self.set_status(
+                    i18n::t(
+                        "Usage : /setkey [cible] clé (4-56 octets, à échanger hors bande)",
+                        "Usage: /setkey [target] key (4-56 bytes, exchange out of band)",
+                    ),
+                    cx,
+                );
+                self.input.update(cx, |input, cx| input.clear(cx));
+                return true;
+            };
+            if key.is_empty() {
+                self.set_status(
+                    i18n::t(
+                        "Usage : /setkey [cible] clé (4-56 octets, à échanger hors bande)",
+                        "Usage: /setkey [target] key (4-56 bytes, exchange out of band)",
+                    ),
+                    cx,
+                );
+                self.input.update(cx, |input, cx| input.clear(cx));
+                return true;
+            }
+            if key.starts_with("cbc:") {
+                self.set_status(
+                    i18n::t(
+                        "Les clés FiSH CBC (préfixe cbc:) ne sont pas prises en charge ; utilisez une clé ECB.",
+                        "FiSH CBC keys (cbc: prefix) are not supported; use an ECB key.",
+                    ),
+                    cx,
+                );
+                self.input.update(cx, |input, cx| input.clear(cx));
+                return true;
+            }
+            if key.starts_with("+OK ") || key.starts_with("mcps ") {
+                self.set_status(
+                    i18n::t(
+                        "Cette clé semble chiffrée (blow.ini) ; utilisez /showkey sur l'autre client puis /setkey ici.",
+                        "This key looks encrypted (blow.ini); use /showkey on the other client, then /setkey here.",
+                    ),
+                    cx,
+                );
+                self.input.update(cx, |input, cx| input.clear(cx));
+                return true;
+            }
+            let (result, relay_priority) = {
+                let mut model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+                let relay_priority = model
+                    .encryption
+                    .as_ref()
+                    .is_some_and(|encryption| encryption.key_for(&target).is_some());
+                let result = model
+                    .fish
+                    .as_mut()
+                    .ok_or_else(|| "chiffrement FiSH indisponible".to_string())
+                    .and_then(|fish| fish.set_text(&network, &target, key));
+                (result, relay_priority)
+            };
+            match result {
+                Ok(()) => {
+                    let mut message = format!(
+                        "{} {target} — {}",
+                        i18n::t("Clé FiSH définie pour", "FiSH key set for"),
+                        fish_compatibility_warning()
+                    );
+                    if relay_priority {
+                        message.push_str(&format!(
+                            " ({})",
+                            i18n::t(
+                                "RelayCrypt reste prioritaire",
+                                "RelayCrypt remains preferred"
+                            )
+                        ));
+                    }
+                    self.set_status(message, cx);
+                }
+                Err(error) => self.set_status(error, cx),
+            }
+            self.input.update(cx, |input, cx| input.clear(cx));
+            return true;
+        }
+        if trimmed == "/delkey" || trimmed.starts_with("/delkey ") {
+            let Some(network) = self.active_fish_network() else {
+                self.set_status(i18n::t("Aucun réseau actif.", "No active network."), cx);
+                self.input.update(cx, |input, cx| input.clear(cx));
+                return true;
+            };
+            let rest = trimmed.strip_prefix("/delkey").unwrap_or("").trim();
+            let target = rest
+                .split_whitespace()
+                .next()
+                .map(str::to_string)
+                .or_else(|| {
+                    self.active_context()
+                        .filter(|(_, _, kind, _)| *kind != BufferKind::Server)
+                        .map(|(_, _, _, name)| name)
+                });
+            let Some(target) = target else {
+                self.set_status(
+                    i18n::t("Usage : /delkey [cible]", "Usage: /delkey [target]"),
+                    cx,
+                );
+                self.input.update(cx, |input, cx| input.clear(cx));
+                return true;
+            };
+            let removed = {
+                let mut model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+                model
+                    .fish
+                    .as_mut()
+                    .is_some_and(|fish| fish.remove(&network, &target))
+            };
+            self.set_status(
+                if removed {
+                    format!(
+                        "{} {target}",
+                        i18n::t("Clé FiSH supprimée pour", "FiSH key removed for")
+                    )
+                } else {
+                    format!(
+                        "{} {target}",
+                        i18n::t("Aucune clé FiSH pour", "No FiSH key for")
+                    )
+                },
+                cx,
+            );
+            self.input.update(cx, |input, cx| input.clear(cx));
+            return true;
+        }
+        if trimmed == "/showkey" || trimmed.starts_with("/showkey ") {
+            let Some(network) = self.active_fish_network() else {
+                self.set_status(i18n::t("Aucun réseau actif.", "No active network."), cx);
+                self.input.update(cx, |input, cx| input.clear(cx));
+                return true;
+            };
+            let rest = trimmed.strip_prefix("/showkey").unwrap_or("").trim();
+            let target = rest
+                .split_whitespace()
+                .next()
+                .map(str::to_string)
+                .or_else(|| {
+                    self.active_context()
+                        .filter(|(_, _, kind, _)| *kind != BufferKind::Server)
+                        .map(|(_, _, _, name)| name)
+                });
+            let Some(target) = target else {
+                self.set_status(
+                    i18n::t("Usage : /showkey [cible]", "Usage: /showkey [target]"),
+                    cx,
+                );
+                self.input.update(cx, |input, cx| input.clear(cx));
+                return true;
+            };
+            let key = {
+                let model = self.model.lock().unwrap_or_else(|e| e.into_inner());
+                model
+                    .fish
+                    .as_ref()
+                    .and_then(|fish| fish.key_for(&network, &target))
+                    .map(|key| String::from_utf8_lossy(key).into_owned())
+            };
+            self.set_status(
+                match key {
+                    Some(key) => {
+                        format!("FiSH {target} : {key} — {}", fish_compatibility_warning())
+                    }
+                    None => format!(
+                        "{} {target}",
+                        i18n::t("Aucune clé FiSH pour", "No FiSH key for")
+                    ),
+                },
+                cx,
+            );
+            self.input.update(cx, |input, cx| input.clear(cx));
+            return true;
+        }
         if let Some(rest) = trimmed.strip_prefix("/encrypt ") {
             let mut parts = rest.split_whitespace();
             let command = parts.next().unwrap_or("");

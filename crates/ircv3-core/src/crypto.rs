@@ -183,7 +183,7 @@ fn decrypt_with_key(key: &[u8; 32], payload: &str) -> Result<String, String> {
     String::from_utf8(plaintext).map_err(|error| error.to_string())
 }
 
-fn restrict_dir(path: &Path) {
+pub(crate) fn restrict_dir(path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -192,7 +192,7 @@ fn restrict_dir(path: &Path) {
     let _ = path;
 }
 
-fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
+pub(crate) fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::io::Write as _;

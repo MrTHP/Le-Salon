@@ -6,7 +6,7 @@
 [![GPUI](https://img.shields.io/badge/UI-GPUI-blue)](https://gpui.rs/)
 [![Linux](https://img.shields.io/badge/Linux-AppImage-success?logo=linux)](https://appimage.org/)
 [![macOS](https://img.shields.io/badge/macOS-universal-lightgrey?logo=apple)](https://www.apple.com/macos/)
-[![Version](https://img.shields.io/badge/version-1.8.0-informational)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-1.9.0-informational)](Cargo.toml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#licence)
 
 **🇫🇷 [Français](#français) · 🇬🇧 [English](#english) · 🌐 [Site web](https://mrthp.github.io/Le-Salon/)**
@@ -131,8 +131,8 @@ navigateur embarqué.
 * **messages multilignes** (`draft/multiline`) via `/paste` et collage de
   plusieurs lignes ;
 * **thèmes import/export** en JSON, **proxy SOCKS5**, **chiffrement
-  RelayCrypt** XChaCha20-Poly1305 et **modération guidée** avec aperçu exact
-  des commandes ;
+  RelayCrypt** XChaCha20-Poly1305, **FiSH (Blowfish ECB) en mode
+  compatibilité** et **modération guidée** avec aperçu exact des commandes ;
 * **partage** de messages et d’extraits via des liens expirants, et paste
   links automatiques pour les longs textes ;
 * **À propos** : dialogue avec version, fonctions et licence.
@@ -148,15 +148,15 @@ Les binaires officiels sont publiés dans les
 Linux peut aussi être produite localement, à la racine de l’application :
 
 ```sh
-chmod +x Le-Salon-1.8.0-x86_64.AppImage
-./Le-Salon-1.8.0-x86_64.AppImage
+chmod +x Le-Salon-1.9.0-x86_64.AppImage
+./Le-Salon-1.9.0-x86_64.AppImage
 ```
 
 Si Wayland pose problème, l’AppRun retente automatiquement sous XWayland.
 Pour forcer X11 :
 
 ```sh
-LE_SALON_X11=1 ./Le-Salon-1.8.0-x86_64.AppImage
+LE_SALON_X11=1 ./Le-Salon-1.9.0-x86_64.AppImage
 ```
 
 L’AppImage embarque le binaire et les bibliothèques X11/xkb ; Vulkan, Wayland,
@@ -194,7 +194,7 @@ sudo apt install build-essential pkg-config \
 
 ```sh
 sh tools/build-appimage-le-salon.sh
-# → Le-Salon-1.8.0-x86_64.AppImage
+# → Le-Salon-1.9.0-x86_64.AppImage
 ```
 
 #### macOS
@@ -206,12 +206,12 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin
 sh tools/build-macos-app.sh
 ```
 
-Le script produit `Le-Salon-1.8.0-macos-universal.zip` (arm64 + Intel) avec
+Le script produit `Le-Salon-1.9.0-macos-universal.zip` (arm64 + Intel) avec
 une signature ad-hoc. macOS bloque les applications non notariées au premier
 lancement :
 
 ```sh
-unzip Le-Salon-1.8.0-macos-universal.zip
+unzip Le-Salon-1.9.0-macos-universal.zip
 xattr -dr com.apple.quarantine "Le Salon.app"
 open "Le Salon.app"
 ```
@@ -270,6 +270,10 @@ Fonctions locales :
 | `/excerpt [n]` | partage les n derniers messages (20 max) |
 | `/proxy hôte:port` | utilise un proxy SOCKS5 |
 | `/encrypt generate\|set\|set-key\|list\|remove` | gère le chiffrement RelayCrypt |
+| `/setkey [cible] clé` | définit une clé FiSH (compatibilité mIRC/HexChat/irssi) |
+| `/delkey [cible]` | supprime la clé FiSH |
+| `/showkey [cible]` | affiche la clé FiSH |
+| `/fish [list\|status]` | état des clés FiSH du réseau |
 
 ### Raccourcis
 
@@ -295,6 +299,7 @@ Fonctions locales :
   existante dans `~/.config/ircv3-gpui/` est migrée automatiquement au premier
   lancement pour ne pas perdre les réglages.
 * Messages planifiés : `~/.config/le-salon/scheduled.json`.
+* Clés FiSH (compatibilité) : `~/.config/le-salon/fish_keys.json`.
 * **Sécurité par défaut** : TLS et vérification du certificat activés.
   **SASL PLAIN exige TLS + certificat vérifié** ; une configuration SASL sans
   TLS est refusée avant toute connexion.
@@ -308,8 +313,13 @@ Fonctions locales :
 * `--no-tls`, `--insecure` et `--sasl-password` sont **strictement limités à
   la session** et ne modifient pas la configuration persistante. Préférer
   `LE_SALON_SASL_PASSWORD` à `--sasl-password` (visible dans `ps`).
-* `config.toml` et `scheduled.json` sont écrits en **0600** dans un dossier
-  **0700**. Détails et limites : [`SECURITY.md`](SECURITY.md).
+* `config.toml`, `scheduled.json`, `encryption.json` et `fish_keys.json` sont
+  écrits en **0600** dans un dossier **0700**. Détails et limites :
+  [`SECURITY.md`](SECURITY.md).
+* **FiSH (Blowfish ECB)** est proposé uniquement pour la compatibilité avec
+  mIRC/HexChat/irssi/ZNC. Il n'authentifie ni les messages ni les
+  correspondants et RelayCrypt reste prioritaire dès qu'une clé existe pour
+  la cible. Les clés FiSH s'échangent hors bande (`/showkey`).
 * La fenêtre **Préférences** ne touche qu’aux réglages d’interface : elle
   n’affiche ni ne modifie les secrets de connexion. Les toasts affichent le
   contenu des messages et peuvent être désactivés.
@@ -349,6 +359,10 @@ un client console, des tests ou une autre interface.
 * L’AppImage locale est construite sur Fedora 45 (glibc récente). Pour les
   distributions plus anciennes, utiliser le workflow GitHub Actions ou
   reconstruire dans un conteneur avec une glibc plus ancienne.
+* FiSH : mode ECB uniquement, pas de DH1080 ni de CBC ; les clés doivent être
+  échangées hors bande. Les clés de moins de 4 octets ne sont pas acceptées.
+  Les clés existantes d'un fichier `blow.ini` (mIRC/irssi) ne sont pas
+  importées : utilisez `/showkey` sur l'autre client puis `/setkey` ici.
 * Sans trousseau système joignable (session sans D-Bus, conteneur, machine
   distante), le mot de passe SASL mémorisé retombe sur le fichier 0600.
 
@@ -457,8 +471,8 @@ framework: GPU rendering, fast startup, no Electron and no embedded browser.
 * **multiline messages** (`draft/multiline`) through `/paste` and multi-line
   clipboard content;
 * **JSON theme import/export**, **SOCKS5 proxy**, **RelayCrypt encryption**
-  with XChaCha20-Poly1305 and **guided moderation** with an exact command
-  preview;
+  with XChaCha20-Poly1305, **FiSH (Blowfish ECB) compatibility mode** and
+  **guided moderation** with an exact command preview;
 * **sharing** messages and excerpts through expiring links, plus automatic
   paste links for long text;
 * **About** dialog with version, features and license.
@@ -474,15 +488,15 @@ Official binaries are published in the
 AppImage can also be produced locally at the application root:
 
 ```sh
-chmod +x Le-Salon-1.8.0-x86_64.AppImage
-./Le-Salon-1.8.0-x86_64.AppImage
+chmod +x Le-Salon-1.9.0-x86_64.AppImage
+./Le-Salon-1.9.0-x86_64.AppImage
 ```
 
 If Wayland causes trouble, AppRun automatically retries under XWayland. To
 force X11:
 
 ```sh
-LE_SALON_X11=1 ./Le-Salon-1.8.0-x86_64.AppImage
+LE_SALON_X11=1 ./Le-Salon-1.9.0-x86_64.AppImage
 ```
 
 The AppImage bundles the binary and the X11/xkb libraries; Vulkan, Wayland,
@@ -520,7 +534,7 @@ sudo apt install build-essential pkg-config \
 
 ```sh
 sh tools/build-appimage-le-salon.sh
-# → Le-Salon-1.8.0-x86_64.AppImage
+# → Le-Salon-1.9.0-x86_64.AppImage
 ```
 
 #### macOS
@@ -532,11 +546,11 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin
 sh tools/build-macos-app.sh
 ```
 
-The script produces `Le-Salon-1.8.0-macos-universal.zip` (arm64 + Intel)
+The script produces `Le-Salon-1.9.0-macos-universal.zip` (arm64 + Intel)
 with an ad-hoc signature. macOS blocks non-notarized apps on first launch:
 
 ```sh
-unzip Le-Salon-1.8.0-macos-universal.zip
+unzip Le-Salon-1.9.0-macos-universal.zip
 xattr -dr com.apple.quarantine "Le Salon.app"
 open "Le Salon.app"
 ```
@@ -595,6 +609,10 @@ Local commands:
 | `/excerpt [n]` | share the last n messages (20 max) |
 | `/proxy host:port` | use a SOCKS5 proxy |
 | `/encrypt generate\|set\|set-key\|list\|remove` | manage RelayCrypt encryption |
+| `/setkey [target] key` | set a FiSH key (mIRC/HexChat/irssi compatibility) |
+| `/delkey [target]` | remove the FiSH key |
+| `/showkey [target]` | show the FiSH key |
+| `/fish [list\|status]` | FiSH key status for the network |
 
 ### Shortcuts
 
@@ -620,6 +638,7 @@ Local commands:
   `~/.config/ircv3-gpui/` is migrated automatically on first launch so no
   settings are lost.
 * Scheduled messages: `~/.config/le-salon/scheduled.json`.
+* FiSH keys (compatibility): `~/.config/le-salon/fish_keys.json`.
 * **Secure defaults**: TLS and certificate verification are enabled.
   **SASL PLAIN requires TLS + a verified certificate**; SASL without TLS is
   refused before any network connection.
@@ -632,8 +651,13 @@ Local commands:
 * `--no-tls`, `--insecure` and `--sasl-password` are **session-only** and do
   not modify the persistent configuration. Prefer
   `LE_SALON_SASL_PASSWORD` over `--sasl-password` (visible in `ps`).
-* `config.toml` and `scheduled.json` are written as **0600** inside a
-  **0700** directory. Details and limitations: [`SECURITY.md`](SECURITY.md).
+* `config.toml`, `scheduled.json`, `encryption.json` and `fish_keys.json` are
+  written as **0600** inside a **0700** directory. Details and limitations:
+  [`SECURITY.md`](SECURITY.md).
+* **FiSH (Blowfish ECB)** is provided only for compatibility with
+  mIRC/HexChat/irssi/ZNC. It authenticates neither messages nor peers, and
+  RelayCrypt remains preferred whenever a key exists for the target. FiSH
+  keys are exchanged out of band (`/showkey`).
 * The **Preferences** window only changes interface settings: it never
   displays or modifies connection secrets. Toasts display message content and
   can be disabled.
@@ -672,6 +696,10 @@ tests or another interface.
 * The local AppImage is built on Fedora 45 (recent glibc). For older
   distributions, use the GitHub Actions workflow or rebuild in a container
   with an older glibc.
+* FiSH: ECB mode only, no DH1080 or CBC; keys must be exchanged out of band.
+  Keys shorter than 4 bytes are rejected. Existing `blow.ini` keys
+  (mIRC/irssi) are not imported: use `/showkey` on the other client and
+  `/setkey` here.
 * Without a reachable system keyring (no D-Bus session, container, remote
   machine), the remembered SASL password falls back to the 0600 file.
 
