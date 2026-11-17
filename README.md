@@ -6,7 +6,7 @@
 [![GPUI](https://img.shields.io/badge/UI-GPUI-blue)](https://gpui.rs/)
 [![Linux](https://img.shields.io/badge/Linux-AppImage-success?logo=linux)](https://appimage.org/)
 [![macOS](https://img.shields.io/badge/macOS-universal-lightgrey?logo=apple)](https://www.apple.com/macos/)
-[![Version](https://img.shields.io/badge/version-1.9.0-informational)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-1.9.1-informational)](Cargo.toml)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#licence)
 
 **🇫🇷 [Français](#français) · 🇬🇧 [English](#english) · 🌐 [Site web](https://mrthp.github.io/Le-Salon/)**
@@ -148,15 +148,15 @@ Les binaires officiels sont publiés dans les
 Linux peut aussi être produite localement, à la racine de l’application :
 
 ```sh
-chmod +x Le-Salon-1.9.0-x86_64.AppImage
-./Le-Salon-1.9.0-x86_64.AppImage
+chmod +x Le-Salon-1.9.1-x86_64.AppImage
+./Le-Salon-1.9.1-x86_64.AppImage
 ```
 
 Si Wayland pose problème, l’AppRun retente automatiquement sous XWayland.
 Pour forcer X11 :
 
 ```sh
-LE_SALON_X11=1 ./Le-Salon-1.9.0-x86_64.AppImage
+LE_SALON_X11=1 ./Le-Salon-1.9.1-x86_64.AppImage
 ```
 
 L’AppImage embarque le binaire et les bibliothèques X11/xkb ; Vulkan, Wayland,
@@ -194,7 +194,7 @@ sudo apt install build-essential pkg-config \
 
 ```sh
 sh tools/build-appimage-le-salon.sh
-# → Le-Salon-1.9.0-x86_64.AppImage
+# → Le-Salon-1.9.1-x86_64.AppImage
 ```
 
 #### macOS
@@ -206,18 +206,19 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin
 sh tools/build-macos-app.sh
 ```
 
-Le script produit `Le-Salon-1.9.0-macos-universal.zip` (arm64 + Intel) avec
+Le script produit `Le-Salon-1.9.1-macos-universal.zip` (arm64 + Intel) avec
 une signature ad-hoc. macOS bloque les applications non notariées au premier
 lancement :
 
 ```sh
-unzip Le-Salon-1.9.0-macos-universal.zip
+unzip Le-Salon-1.9.1-macos-universal.zip
 xattr -dr com.apple.quarantine "Le Salon.app"
 open "Le Salon.app"
 ```
 
-Le workflow `.github/workflows/build.yml` construit l’AppImage Linux et le
-zip macOS sur des runners natifs.
+Le workflow `.github/workflows/build.yml` construit l’AppImage Linux dans un
+conteneur Ubuntu 22.04 (pour une glibc compatible avec les distributions plus
+anciennes) et le zip macOS sur un runner natif.
 
 ### Utilisation
 
@@ -356,9 +357,10 @@ un client console, des tests ou une autre interface.
   le CGNAT bloque le transfert direct.
 * L’upload litterbox est **public pendant 72 h**, limité à 50 Mo.
 * La barre système est spécifique à Linux ; macOS dispose des notifications.
-* L’AppImage locale est construite sur Fedora 45 (glibc récente). Pour les
-  distributions plus anciennes, utiliser le workflow GitHub Actions ou
-  reconstruire dans un conteneur avec une glibc plus ancienne.
+* L’AppImage officielle est construite dans un conteneur **Ubuntu 22.04**
+  (glibc 2.35) par la CI, pour rester compatible avec les distributions
+  récentes. Une compilation locale sur Fedora 45 (glibc 2.44) produit une
+  AppImage non portable : utiliser le workflow ou le conteneur.
 * FiSH : mode ECB uniquement, pas de DH1080 ni de CBC ; les clés doivent être
   échangées hors bande. Les clés de moins de 4 octets ne sont pas acceptées.
   Les clés existantes d'un fichier `blow.ini` (mIRC/irssi) ne sont pas
@@ -488,15 +490,15 @@ Official binaries are published in the
 AppImage can also be produced locally at the application root:
 
 ```sh
-chmod +x Le-Salon-1.9.0-x86_64.AppImage
-./Le-Salon-1.9.0-x86_64.AppImage
+chmod +x Le-Salon-1.9.1-x86_64.AppImage
+./Le-Salon-1.9.1-x86_64.AppImage
 ```
 
 If Wayland causes trouble, AppRun automatically retries under XWayland. To
 force X11:
 
 ```sh
-LE_SALON_X11=1 ./Le-Salon-1.9.0-x86_64.AppImage
+LE_SALON_X11=1 ./Le-Salon-1.9.1-x86_64.AppImage
 ```
 
 The AppImage bundles the binary and the X11/xkb libraries; Vulkan, Wayland,
@@ -534,7 +536,7 @@ sudo apt install build-essential pkg-config \
 
 ```sh
 sh tools/build-appimage-le-salon.sh
-# → Le-Salon-1.9.0-x86_64.AppImage
+# → Le-Salon-1.9.1-x86_64.AppImage
 ```
 
 #### macOS
@@ -546,17 +548,18 @@ rustup target add aarch64-apple-darwin x86_64-apple-darwin
 sh tools/build-macos-app.sh
 ```
 
-The script produces `Le-Salon-1.9.0-macos-universal.zip` (arm64 + Intel)
+The script produces `Le-Salon-1.9.1-macos-universal.zip` (arm64 + Intel)
 with an ad-hoc signature. macOS blocks non-notarized apps on first launch:
 
 ```sh
-unzip Le-Salon-1.9.0-macos-universal.zip
+unzip Le-Salon-1.9.1-macos-universal.zip
 xattr -dr com.apple.quarantine "Le Salon.app"
 open "Le Salon.app"
 ```
 
-The `.github/workflows/build.yml` workflow builds the Linux AppImage and the
-macOS zip on native runners.
+The `.github/workflows/build.yml` workflow builds the Linux AppImage in an
+Ubuntu 22.04 container (for a glibc compatible with older distributions) and
+the macOS zip on a native runner.
 
 ### Usage
 
@@ -693,9 +696,10 @@ tests or another interface.
   direct transfers.
 * Litterbox upload is **public for 72 h**, limited to 50 MB.
 * The system tray is Linux-only; macOS has notifications.
-* The local AppImage is built on Fedora 45 (recent glibc). For older
-  distributions, use the GitHub Actions workflow or rebuild in a container
-  with an older glibc.
+* The official AppImage is built in an **Ubuntu 22.04** container (glibc
+  2.35) by CI, so it stays compatible with newer distributions. A local
+  build on Fedora 45 (glibc 2.44) produces a non-portable AppImage: use the
+  workflow or the container.
 * FiSH: ECB mode only, no DH1080 or CBC; keys must be exchanged out of band.
   Keys shorter than 4 bytes are rejected. Existing `blow.ini` keys
   (mIRC/irssi) are not imported: use `/showkey` on the other client and

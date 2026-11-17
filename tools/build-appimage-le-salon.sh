@@ -12,6 +12,20 @@ APP=le-salon
 APPDIR="$APP_ROOT/AppDir"
 OUT="$APP_ROOT/Le-Salon-$VERSION-x86_64.AppImage"
 
+# Vérifie la compatibilité de la glibc du système de build : une AppImage
+# hérite de ses exigences et ne peut pas tourner sur une glibc plus ancienne.
+GLIBC_VERSION="$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')"
+if [ -n "$GLIBC_VERSION" ]; then
+  GLIBC_MAJOR="${GLIBC_VERSION%%.*}"
+  GLIBC_MINOR="${GLIBC_VERSION#*.}"
+  if [ "$GLIBC_MAJOR" -gt 2 ] || { [ "$GLIBC_MAJOR" -eq 2 ] && [ "$GLIBC_MINOR" -gt 35 ]; }; then
+    echo "ATTENTION : glibc $GLIBC_VERSION détectée." >&2
+    echo "Cette AppImage ne démarrera pas sur Ubuntu 22.04 (glibc 2.35)," >&2
+    echo "la plus ancienne LTS encore supportée par le catalogue AppImage." >&2
+    echo "Construire dans un conteneur ubuntu:22.04 (voir .github/workflows/build.yml)." >&2
+  fi
+fi
+
 echo "== compilation release ($APP $VERSION) =="
 cargo build --release -p le-salon
 
@@ -97,6 +111,10 @@ else
 fi
 
 echo "== empaquetage : $OUT =="
+# Sans FUSE (conteneur, CI), le runtime d'appimagetool doit s'auto-extraire.
+if [ ! -e /dev/fuse ] && [ "${APPIMAGE_EXTRACT_AND_RUN:-0}" != "1" ]; then
+  export APPIMAGE_EXTRACT_AND_RUN=1
+fi
 ARCH=x86_64 "$APPIMAGETOOL" "$APPDIR" "$OUT"
 chmod +x "$OUT"
 ls -lh "$OUT"

@@ -25,19 +25,33 @@ jobs:
           cargo audit
 
   linux:
+    # L'AppImage doit tourner sur les distributions plus récentes que la
+    # machine de build, jamais l'inverse : glibc n'est pas rétrocompatible.
+    # On construit donc sur l'Ubuntu LTS la plus ancienne encore supportée
+    # (22.04, glibc 2.35), comme le demande le catalogue AppImage.
     runs-on: ubuntu-24.04
+    container: ubuntu:22.04
+    env:
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+      DEBIAN_FRONTEND: noninteractive
     steps:
-      - uses: actions/checkout@v4
-      - name: System dependencies (GPUI, X11, xkbcommon, fonts)
+      - name: Base dependencies (git for checkout, tools for Rust/AppImage)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential pkg-config curl squashfs-tools \
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential pkg-config curl ca-certificates git file zstd \
+            squashfs-tools xvfb xdotool mesa-vulkan-drivers libvulkan1 \
             libxkbcommon-dev libxkbcommon-x11-dev \
-            libxcb1-dev libxcb-xkb-dev libx11-dev \
+            libxcb1-dev libxcb-xkb-dev libx11-dev libx11-xcb-dev \
             libwayland-dev libfontconfig1-dev libfreetype-dev \
             libvulkan-dev
-      - uses: dtolnay/rust-toolchain@stable
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - uses: actions/checkout@v4
+      - name: Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs |
+            sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: .
@@ -45,6 +59,30 @@ jobs:
         run: cargo test --workspace
       - name: AppImage
         run: sh tools/build-appimage-le-salon.sh
+      - name: Smoke test headless (Xvfb, sans réseau)
+        run: |
+          set -eu
+          appimage="$(ls Le-Salon-*-x86_64.AppImage | head -1)"
+          mkdir -p /tmp/le-salon-smoke
+          HOME=/tmp/le-salon-smoke xvfb-run -a sh -c '
+            set -eu
+            export APPIMAGE_EXTRACT_AND_RUN=1
+            ./'"$appimage"' >/tmp/le-salon.log 2>&1 &
+            pid=$!
+            sleep 10
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "L'application a quitté prématurément :" >&2
+              cat /tmp/le-salon.log >&2
+              exit 1
+            fi
+            xdotool search --name "Le Salon" >/dev/null || {
+              echo "Aucune fenêtre Le Salon détectée :" >&2
+              cat /tmp/le-salon.log >&2
+              kill "$pid" 2>/dev/null || true
+              exit 1
+            }
+            kill "$pid" 2>/dev/null || true
+          '
       - name: Upload Linux AppImage
         uses: actions/upload-artifact@v4
         with:
