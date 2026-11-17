@@ -51,7 +51,7 @@ echo "== bibliothèques embarquées (ldd) =="
 # On n'embarque que les bibliothèques X11/xkb réellement liées. Le reste
 # (Vulkan, Wayland, fontconfig, freetype, pilotes) vient de l'hôte : c'est
 # indispensable pour utiliser le GPU et les polices de la distribution.
-EXCLUDE='^linux-vdso|ld-linux|libc\.so|libm\.so|libpthread|libdl\.so|librt\.so|libnss_|libresolv|libutil|libgcc_s|libstdc\+\+|libvulkan|libGL|libEGL|libdrm|libgbm|libfontconfig|libfreetype|libwayland'
+EXCLUDE='^linux-vdso|ld-linux|libc\.so|libm\.so|libpthread|libdl\.so|librt\.so|libnss_|libresolv|libutil|libgcc_s|libstdc\+\+|libvulkan|libGL|libEGL|libdrm|libgbm|libfontconfig|libfreetype|libwayland|^libxcb\.so'
 ldd "$APP_ROOT/target/release/$APP" |
   awk '{if ($3 ~ /^\//) print $3; else if ($1 ~ /^\//) print $1}' |
   sort -u |

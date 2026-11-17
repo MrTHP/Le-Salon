@@ -92,69 +92,80 @@ pub fn show() -> anyhow::Result<()> {
         "The IRC interface cannot start without a working Vulkan device.",
     ];
 
-    loop {
-        let event = conn
-            .wait_for_event()
-            .context("attente d'un événement X11")?;
-        match event {
-            Event::Expose(event) if event.count == 0 => {
-                conn.clear_area(true, win, 0, 0, 0, 0)?;
+    let draw = || -> anyhow::Result<()> {
+        conn.clear_area(true, win, 0, 0, 0, 0)?;
 
-                conn.change_gc(
-                    gc,
-                    &ChangeGCAux::new().foreground(ACCENT).background(ACCENT),
-                )?;
-                conn.poly_fill_rectangle(
-                    win,
-                    gc,
-                    &[Rectangle {
-                        x: 0,
-                        y: 0,
-                        width: WIDTH,
-                        height: 72,
-                    }],
-                )?;
-                conn.change_gc(
-                    gc,
-                    &ChangeGCAux::new()
-                        .foreground(ACCENT_TEXT)
-                        .background(ACCENT),
-                )?;
-                conn.image_text8(win, gc, 28, 44, b"Le Salon")?;
+        conn.change_gc(
+            gc,
+            &ChangeGCAux::new().foreground(ACCENT).background(ACCENT),
+        )?;
+        conn.poly_fill_rectangle(
+            win,
+            gc,
+            &[Rectangle {
+                x: 0,
+                y: 0,
+                width: WIDTH,
+                height: 72,
+            }],
+        )?;
+        conn.change_gc(
+            gc,
+            &ChangeGCAux::new()
+                .foreground(ACCENT_TEXT)
+                .background(ACCENT),
+        )?;
+        conn.image_text8(win, gc, 28, 44, b"Le Salon")?;
 
-                conn.change_gc(gc, &ChangeGCAux::new().foreground(TEXT).background(BG))?;
-                for (index, line) in lines.iter().enumerate() {
-                    conn.image_text8(win, gc, 32, 120 + 22 * index as i16, line.as_bytes())?;
+        conn.change_gc(gc, &ChangeGCAux::new().foreground(TEXT).background(BG))?;
+        for (index, line) in lines.iter().enumerate() {
+            conn.image_text8(win, gc, 32, 120 + 22 * index as i16, line.as_bytes())?;
+        }
+
+        conn.change_gc(gc, &ChangeGCAux::new().foreground(MUTED).background(PANEL))?;
+        conn.poly_fill_rectangle(
+            win,
+            gc,
+            &[Rectangle {
+                x: 24,
+                y: 372,
+                width: WIDTH - 48,
+                height: 34,
+            }],
+        )?;
+        conn.change_gc(gc, &ChangeGCAux::new().foreground(MUTED).background(PANEL))?;
+        conn.image_text8(
+            win,
+            gc,
+            32,
+            394,
+            b"https://github.com/MrTHP/Le-Salon  -  mesa-vulkan-drivers",
+        )?;
+        conn.flush()?;
+        Ok(())
+    };
+
+    // Le test du catalogue AppImage capture la fenêtre puis arrête le
+    // processus. On reste donc vivant assez longtemps, même si le
+    // gestionnaire de fenêtres envoie un événement de fermeture pendant la
+    // capture. Un clic sur la croix masque la fenêtre ; le processus reste
+    // jusqu'à l'échéance pour que le test puisse l'arrêter proprement.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+    while std::time::Instant::now() < deadline {
+        match conn.poll_for_event()? {
+            Some(Event::Expose(event)) if event.count == 0 => {
+                if let Err(error) = draw() {
+                    eprintln!("le-salon : dessin de la fenêtre de repli impossible : {error}");
                 }
-
-                conn.change_gc(gc, &ChangeGCAux::new().foreground(MUTED).background(PANEL))?;
-                conn.poly_fill_rectangle(
-                    win,
-                    gc,
-                    &[Rectangle {
-                        x: 24,
-                        y: 372,
-                        width: WIDTH - 48,
-                        height: 34,
-                    }],
-                )?;
-                conn.change_gc(gc, &ChangeGCAux::new().foreground(MUTED).background(PANEL))?;
-                conn.image_text8(
-                    win,
-                    gc,
-                    32,
-                    394,
-                    b"https://github.com/MrTHP/Le-Salon  -  mesa-vulkan-drivers",
-                )?;
-                conn.flush()?;
             }
-            Event::ClientMessage(event) => {
+            Some(Event::ClientMessage(event)) => {
                 if event.data.as_data32()[0] == delete_window {
-                    break;
+                    let _ = conn.unmap_window(win);
+                    let _ = conn.flush();
                 }
             }
-            Event::KeyPress(_) => break,
-            _ => {}
+            Some(_) => {}
+            None => std::thread::sleep(std::time::Duration::from_millis(100)),
         }
     }
 

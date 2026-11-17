@@ -5,10 +5,10 @@
 
   const html = document.documentElement;
   const fallbackRelease = {
-    tag: "v1.9.3",
-    name: "Le-Salon-1.9.3-x86_64.AppImage",
-    size: 12032504,
-    digest: "sha256:08f3b6c45682d24bda6b0b3f8cba02ba6a53d61c82f7633d5e2c9ac75a7010c4",
+    tag: "v1.9.4",
+    name: "Le-Salon-1.9.4-x86_64.AppImage",
+    size: 11995640,
+    digest: "sha256:b7764c23251ba07af236f9253ebdfef594a9a360ab239ab72c794041db68d60b",
     url: "https://github.com/MrTHP/Le-Salon/releases/latest",
   };
   let release = { ...fallbackRelease };
