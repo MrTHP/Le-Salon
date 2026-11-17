@@ -40,6 +40,7 @@ struct Cli {
     sasl_user: Option<String>,
     sasl_password: Option<String>,
     x11: bool,
+    probe_vulkan: bool,
 }
 
 fn parse_cli() -> Result<(Cli, bool), String> {
@@ -89,6 +90,7 @@ fn parse_cli() -> Result<(Cli, bool), String> {
             "--no-tls" => cli.tls = Some(false),
             "--insecure" | "-k" => cli.insecure = true,
             "--x11" => cli.x11 = true,
+            "--probe-vulkan" => cli.probe_vulkan = true,
             "--version" | "-V" => {
                 println!("{APP_NAME} {VERSION}");
                 return Ok((cli, true));
@@ -140,6 +142,27 @@ fn main() {
     if exit {
         return;
     }
+
+    // Sonde interne utilisée par AppRun : détermine si un pilote Vulkan
+    // utilisable existe avant de lancer l'interface. En cas d'échec, AppRun
+    // active le pilote logiciel lavapipe embarqué (sans jamais forcer le
+    // rendu logiciel sur une machine dotée d'un GPU fonctionnel).
+    if cli.probe_vulkan {
+        let result = unsafe {
+            blade_graphics::Context::init(blade_graphics::ContextDesc {
+                presentation: true,
+                ..Default::default()
+            })
+        };
+        match result {
+            Ok(_) => std::process::exit(0),
+            Err(error) => {
+                eprintln!("{error:?}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     if cli.x11 {
         // GPUI choisit son backend au démarrage : Wayland est prioritaire dès
         // que WAYLAND_DISPLAY est présent. On le retire pour forcer X11/XWayland.

@@ -59,10 +59,19 @@ jobs:
         run: cargo test --workspace
       - name: AppImage
         run: sh tools/build-appimage-le-salon.sh
-      - name: Smoke test headless (Xvfb, sans réseau)
+      - name: Smoke test headless (Xvfb, sans réseau, sans pilote Vulkan)
         run: |
           set -eu
           appimage="$(ls Le-Salon-*-x86_64.AppImage | head -1)"
+          # Simule l'environnement du catalogue AppImage : Xvfb, aucun GPU et
+          # aucun pilote Vulkan installé. Le repli lavapipe embarqué doit
+          # permettre à la fenêtre de s'ouvrir quand même.
+          mkdir -p /tmp/vulkan-icd-backup
+          for dir in /usr/share/vulkan/icd.d /etc/vulkan/icd.d /usr/local/share/vulkan/icd.d; do
+            if [ -d "$dir" ]; then
+              find "$dir" -maxdepth 1 -name '*.json' -exec mv {} /tmp/vulkan-icd-backup/ \;
+            fi
+          done
           mkdir -p /tmp/le-salon-smoke
           HOME=/tmp/le-salon-smoke xvfb-run -a sh -c '
             set -eu

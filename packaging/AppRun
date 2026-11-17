@@ -26,6 +26,20 @@ if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
   exit 1
 fi
 
+# Certains environnements (Xvfb, VM, conteneur, CI) n'ont aucun pilote
+# Vulkan. GPUI/Blade ne peut alors pas créer sa fenêtre. On sonde Vulkan et,
+# seulement en cas d'échec, on active le pilote logiciel lavapipe embarqué :
+# une machine avec un GPU fonctionnel continue d'utiliser son pilote système.
+if [ -z "${VK_ICD_FILENAMES:-}" ] && [ -z "${VK_DRIVER_FILES:-}" ] \
+   && ! "$HERE/usr/bin/le-salon" --probe-vulkan >/dev/null 2>&1; then
+  LVP_ICD="$HERE/usr/share/le-salon/vulkan/lvp_icd.x86_64.json"
+  if [ -f "$LVP_ICD" ]; then
+    export VK_ICD_FILENAMES="$LVP_ICD"
+    export VK_DRIVER_FILES="$LVP_ICD"
+    echo "le-salon : aucun pilote Vulkan détecté, repli sur le rendu logiciel lavapipe." >&2
+  fi
+fi
+
 # Wayland peut échouer selon le compositeur ; on retente sous XWayland si
 # un serveur X est disponible. Un quit normal (code 0) n'est pas réessayé.
 if [ -n "${WAYLAND_DISPLAY:-}" ] && [ -n "${DISPLAY:-}" ] && [ "${LE_SALON_X11:-0}" != "1" ]; then
