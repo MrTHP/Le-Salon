@@ -81,19 +81,6 @@ for lib in "$APPDIR"/usr/lib/*.so*; do
     done
 done
 
-echo "== repli Vulkan logiciel (lavapipe) =="
-LVP_LIB=/usr/lib/x86_64-linux-gnu/libvulkan_lvp.so
-LVP_JSON=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json
-if [ -f "$LVP_LIB" ] && [ -f "$LVP_JSON" ]; then
-  cp -L "$LVP_LIB" "$APPDIR/usr/lib/libvulkan_lvp.so"
-  mkdir -p "$APPDIR/usr/share/le-salon/vulkan"
-  sed 's#"library_path"[[:space:]]*:[[:space:]]*"[^"]*"#"library_path": "../../../lib/libvulkan_lvp.so"#' \
-    "$LVP_JSON" > "$APPDIR/usr/share/le-salon/vulkan/lvp_icd.x86_64.json"
-  echo "  embarqué : lavapipe (repli si aucun pilote Vulkan)"
-else
-  echo "  ATTENTION : mesa-vulkan-drivers absent ; pas de repli Vulkan logiciel." >&2
-fi
-
 echo "== contenu AppDir =="
 find "$APPDIR" -maxdepth 3 | sort
 du -sh "$APPDIR"

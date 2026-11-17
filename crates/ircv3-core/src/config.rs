@@ -84,7 +84,7 @@ impl Default for Config {
             proxy: String::new(),
             connect_on_start: false,
             language: "auto".into(),
-            theme: "nuit".into(),
+            theme: "papier".into(),
             notifications: true,
             in_app_toasts: true,
             toast_seconds: 3,

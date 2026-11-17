@@ -7,6 +7,7 @@ mod chat;
 mod connect_form;
 mod drafts;
 mod emoji;
+mod fallback;
 mod http;
 mod i18n;
 mod menu;
@@ -41,6 +42,7 @@ struct Cli {
     sasl_password: Option<String>,
     x11: bool,
     probe_vulkan: bool,
+    fallback_window: bool,
 }
 
 fn parse_cli() -> Result<(Cli, bool), String> {
@@ -91,6 +93,7 @@ fn parse_cli() -> Result<(Cli, bool), String> {
             "--insecure" | "-k" => cli.insecure = true,
             "--x11" => cli.x11 = true,
             "--probe-vulkan" => cli.probe_vulkan = true,
+            "--fallback-window" => cli.fallback_window = true,
             "--version" | "-V" => {
                 println!("{APP_NAME} {VERSION}");
                 return Ok((cli, true));
@@ -161,6 +164,15 @@ fn main() {
                 std::process::exit(1);
             }
         }
+    }
+
+    // Repli sans Vulkan : une fenêtre X11 légère explique quoi installer.
+    if cli.fallback_window {
+        if let Err(error) = fallback::show() {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
     }
 
     if cli.x11 {

@@ -40,7 +40,7 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends \
             build-essential pkg-config curl ca-certificates git file zstd \
-            squashfs-tools xvfb xdotool mesa-vulkan-drivers libvulkan1 \
+            squashfs-tools xvfb xdotool libvulkan1 \
             libxkbcommon-dev libxkbcommon-x11-dev \
             libxcb1-dev libxcb-xkb-dev libx11-dev libx11-xcb-dev \
             libwayland-dev libfontconfig1-dev libfreetype-dev \
@@ -62,36 +62,15 @@ jobs:
       - name: Smoke test headless (Xvfb, sans réseau, sans pilote Vulkan)
         run: |
           set -eu
-          appimage="$(ls Le-Salon-*-x86_64.AppImage | head -1)"
           # Simule l'environnement du catalogue AppImage : Xvfb, aucun GPU et
-          # aucun pilote Vulkan installé. Le repli lavapipe embarqué doit
-          # permettre à la fenêtre de s'ouvrir quand même.
+          # aucun pilote Vulkan installé. Le repli doit ouvrir une fenêtre.
           mkdir -p /tmp/vulkan-icd-backup
           for dir in /usr/share/vulkan/icd.d /etc/vulkan/icd.d /usr/local/share/vulkan/icd.d; do
             if [ -d "$dir" ]; then
               find "$dir" -maxdepth 1 -name '*.json' -exec mv {} /tmp/vulkan-icd-backup/ \;
             fi
           done
-          mkdir -p /tmp/le-salon-smoke
-          HOME=/tmp/le-salon-smoke xvfb-run -a sh -c '
-            set -eu
-            export APPIMAGE_EXTRACT_AND_RUN=1
-            ./'"$appimage"' >/tmp/le-salon.log 2>&1 &
-            pid=$!
-            sleep 10
-            if ! kill -0 "$pid" 2>/dev/null; then
-              echo "L'application a quitté prématurément :" >&2
-              cat /tmp/le-salon.log >&2
-              exit 1
-            fi
-            xdotool search --name "Le Salon" >/dev/null || {
-              echo "Aucune fenêtre Le Salon détectée :" >&2
-              cat /tmp/le-salon.log >&2
-              kill "$pid" 2>/dev/null || true
-              exit 1
-            }
-            kill "$pid" 2>/dev/null || true
-          '
+          sh tools/smoke-test-appimage.sh
       - name: Upload Linux AppImage
         uses: actions/upload-artifact@v4
         with:
